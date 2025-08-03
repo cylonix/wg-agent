@@ -510,10 +510,8 @@ where
             let ret = self.add_del_ip_rule(
                 true,
                 Some(vxlan.vid as u32),
-                None,
                 vxlan.vid as u32,
                 100 as u32,
-                None,
                 None,
             );
 

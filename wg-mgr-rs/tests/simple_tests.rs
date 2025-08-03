@@ -195,7 +195,7 @@ fn test_std_networking() {
 #[test]
 fn test_basic_constants() {
     // Test that we can access some basic networking constants
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::Ipv4Addr;
 
     let unspecified = Ipv4Addr::UNSPECIFIED;
     assert_eq!(unspecified.to_string(), "0.0.0.0");

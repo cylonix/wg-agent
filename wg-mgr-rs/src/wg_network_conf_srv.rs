@@ -3,13 +3,17 @@
 
 use iptables::{ self };
 use log::{ debug, error, info, warn };
-use rtnetlink::{ new_connection, Handle, IpVersion, LinkVxlan, LinkWireguard };
+use rtnetlink::{
+    new_connection,
+    Handle,
+    IpVersion,
+    LinkVrf,
+    LinkVxlan,
+    LinkWireguard,
+};
 use netlink_packet_route::AddressFamily;
-use netlink_packet_route::address::AddressAttribute;
-use netlink_packet_route::address::AddressMessage;
-use netlink_packet_route::link::LinkAttribute;
-use netlink_packet_route::link::LinkFlags;
-use netlink_packet_route::link::LinkMessage;
+use netlink_packet_route::address::{ AddressAttribute, AddressMessage };
+use netlink_packet_route::link::{ LinkAttribute, LinkFlags };
 use netlink_packet_route::rule::RuleAttribute;
 use netlink_packet_route::route::{
     RouteMessage,
@@ -313,17 +317,15 @@ impl NetworkConfClient {
         None
     }
 
-    pub fn create_vrf_interface(&mut self, name: String, _table_id: u32) -> std::io::Result<u32> {
+    pub fn create_vrf_interface(&mut self, name: String, table_id: u32) -> std::io::Result<u32> {
         let name_clone = name.clone();
 
         self.rt.block_on(async {
-            // Create LinkMessage for VRF interface
-            let mut link_msg = LinkMessage::default();
-            link_msg.header.interface_family = AddressFamily::Unspec;
-            link_msg.attributes.push(LinkAttribute::IfName(name.clone()));
-
-            // Create VRF interface using rtnetlink
-            match self.handle.link().add(link_msg).execute().await {
+            match self.handle
+                .link()
+                .add(LinkVrf::new(&name_clone, table_id).up().build())
+                .execute()
+                .await {
                 Ok(_) => {
                     info!("Successfully created VRF interface {}", name);
                 }
@@ -378,7 +380,7 @@ impl NetworkConfClient {
             // Use the LinkWireguard builder directly
             let create_result = self.handle
                 .link()
-                .add(LinkWireguard::new(&link_name_clone).build())
+                .add(LinkWireguard::new(&link_name_clone).up().build())
                 .execute()
                 .await;
 
@@ -548,11 +550,9 @@ impl NetworkConfClient {
         &mut self,
         add: bool,
         fwmark: Option<u32>,
-        _fwmask: Option<u32>,
         table: u32,
         priority: u32,
-        _flags: Option<u32>,
-        _suppress_prefixlength: Option<u32>
+        suppress_prefixlength: Option<u32>
     ) -> std::io::Result<()> {
         self.rt.block_on(async {
             let result = if add {
@@ -562,9 +562,14 @@ impl NetworkConfClient {
                     .table_id(table)
                     .priority(priority);
 
-                // Add fwmark to rule if specified
                 if let Some(mark) = fwmark {
                     request = request.fw_mark(mark);
+                }
+                if let Some(suppress) = suppress_prefixlength {
+                    request
+                        .message_mut()
+                        .attributes
+                        .push(RuleAttribute::SuppressPrefixLen(suppress));
                 }
 
                 request.execute().await
@@ -1036,10 +1041,8 @@ pub trait NetApiHandler {
         &self,
         add: bool,
         fwmark: Option<u32>,
-        fwmask: Option<u32>,
         table: u32,
         priority: u32,
-        flags: Option<u32>,
         suppress_prefixlength: Option<u32>
     ) -> std::io::Result<()>;
     fn delete_ip_fwmark_rule(&self, fwmark: u32) -> std::io::Result<()>;
@@ -1278,10 +1281,8 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> {
         &self,
         add: bool,
         fwmark: Option<u32>,
-        fwmask: Option<u32>,
         table: u32,
         priority: u32,
-        flags: Option<u32>,
         suppress_prefixlength: Option<u32>
     ) -> std::io::Result<()> {
         debug!(
@@ -1295,7 +1296,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> {
         network_config_client
             .lock()
             .unwrap()
-            .add_del_ip_rule(add, fwmark, fwmask, table, priority, flags, suppress_prefixlength)
+            .add_del_ip_rule(add, fwmark, table, priority, suppress_prefixlength)
     }
 
     fn delete_ip_fwmark_rule(&self, fwmark: u32) -> std::io::Result<()> {

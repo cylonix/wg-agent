@@ -1,0 +1,9 @@
+[build]
+rustflags = ["-D", "warnings"] # Treat warnings as errors in CI
+
+[env]
+RUST_LOG = { value = "debug", force = true }
+RUST_BACKTRACE = { value = "1", force = true }
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"] # Use LLD linker for faster builds (optional)

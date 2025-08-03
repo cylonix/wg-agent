@@ -23,7 +23,28 @@ rtnetlink = "0.17"
 # Other dependencies
 wg-api = {path = "../wg-mgr-api", features = ["server"]}
 wg-rs = { path = "../wg-rs" }
-libc = "0.2.174"
+libc = "0.2"
 netlink-packet-route = "0.24.0"
 pretty_env_logger = "0.5.0"
 clap = "4.5.42"
+
+[dev-dependencies]
+# Essential testing crates
+tokio-test = "0.4"           # Async testing utilities
+tempfile = "3.0"             # Temporary files/dirs for testing
+serial_test = "3.0"          # Sequential test execution
+mockall = "0.11"             # Mocking framework (like Testify)
+pretty_assertions = "1.4"    # Better assertion output
+proptest = "1.0"             # Property-based testing
+criterion = "0.5"            # Benchmarking
+test-log = "0.2"             # Log output during tests
+rstest = "0.18"              # Parameterized tests
+libc = "0.2"                 # For root privilege checks
+
+[[test]]
+name = "integration_tests"
+path = "tests/integration_tests.rs"
+
+[[test]]
+name = "network_integration_tests"
+path = "tests/network_integration_tests.rs"

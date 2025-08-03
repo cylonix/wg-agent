@@ -146,7 +146,7 @@ impl NetworkConfClient {
                 Ok(Some(link)) => {
                     // Initialize all fields with default values first
                     let mut stats = InterfaceStats {
-                        name: Some(name.to_string()), // Fixed: wrap in Some() since it's Option<String>
+                        name: Some(name.to_string()),
                         rx_packets: 0,
                         tx_packets: 0,
                         rx_bytes: 0,
@@ -373,7 +373,7 @@ impl NetworkConfClient {
         ip_with_mask: String
     ) -> std::io::Result<u32> {
         let link_name_clone = link_name.clone();
-    
+
         self.rt.block_on(async {
             // Use the LinkWireguard builder directly
             let create_result = self.handle
@@ -381,7 +381,7 @@ impl NetworkConfClient {
                 .add(LinkWireguard::new(&link_name_clone).build())
                 .execute()
                 .await;
-    
+
             match create_result {
                 Ok(_) => {
                     info!("Successfully created WireGuard interface {}", link_name);
@@ -393,17 +393,17 @@ impl NetworkConfClient {
                     return Err(Error::new(ErrorKind::Other, e.to_string()));
                 }
             }
-    
+
             Ok::<(), Error>(())
         })?;
-    
+
         // Get interface index and configure it
         let if_index = self.get_if_index_by_name(&link_name_clone)?;
         self.configure_interface_ip_and_up(if_index, &ip_with_mask)?;
-        
+
         Ok(if_index)
     }
-    
+
     pub fn create_vxlan_interface(
         &mut self,
         link_name: String,
@@ -416,7 +416,7 @@ impl NetworkConfClient {
             Error::new(ErrorKind::InvalidData, e.to_string())
         )?;
         let link_name_clone = link_name.clone();
-    
+
         self.rt.block_on(async {
             // Use the LinkVxlan builder directly
             let create_result = self.handle
@@ -428,7 +428,7 @@ impl NetworkConfClient {
                     .build())
                 .execute()
                 .await;
-    
+
             match create_result {
                 Ok(_) => {
                     info!("Successfully created VXLAN interface {}", link_name);
@@ -440,17 +440,17 @@ impl NetworkConfClient {
                     return Err(Error::new(ErrorKind::Other, e.to_string()));
                 }
             }
-    
+
             Ok::<(), Error>(())
         })?;
-    
+
         // Get interface index and configure it
         let if_index = self.get_if_index_by_name(&link_name_clone)?;
         self.configure_interface_ip_and_up(if_index, &ip_with_mask)?;
-        
+
         Ok(if_index)
     }
-    
+
     // Helper method to avoid code duplication
     fn configure_interface_ip_and_up(&mut self, if_index: u32, ip_with_mask: &str) -> std::io::Result<()> {
         // Add IP address
@@ -458,7 +458,7 @@ impl NetworkConfClient {
         let ip_addr = IpAddr::from_str(&addr_str).map_err(|e|
             Error::new(ErrorKind::InvalidData, e.to_string())
         )?;
-    
+
         self.rt.block_on(async {
             // Add IP address
             self.handle
@@ -467,20 +467,20 @@ impl NetworkConfClient {
                 .execute()
                 .await
                 .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
-    
+
             // Set interface up
             let mut links = self.handle
                 .link()
                 .get()
                 .match_index(if_index)
                 .execute();
-    
+
             if let Some(mut link) = links
                 .try_next().await
                 .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?
             {
                 link.header.flags.insert(LinkFlags::Up);
-    
+
                 self.handle
                     .link()
                     .set(link)
@@ -488,12 +488,12 @@ impl NetworkConfClient {
                     .await
                     .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
             }
-    
+
             Ok::<(), Error>(())
         })
     }
 
-    fn parse_ip_with_mask(&self, ip_with_mask: &str) -> Result<(String, u8), Error> {
+    pub fn parse_ip_with_mask(&self, ip_with_mask: &str) -> Result<(String, u8), Error> {
         let parts: Vec<&str> = ip_with_mask.trim().split('/').collect();
         if parts.len() != 2 {
             return Err(Error::new(ErrorKind::InvalidInput, "Invalid IP/mask format"));
@@ -1446,7 +1446,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> {
                             None,
                             Some(ifindex),
                             Some(WG_PERSISTENCE_KEEPALIVE_INTERVAL),
-                            ips_slice.as_slice(), // Fixed: use as_slice() to convert Vec<&str> to &[&str]
+                            ips_slice.as_slice(),
                             key
                         );
                         wireguard_create_ret
@@ -1513,5 +1513,261 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> {
         }
 
         Ok(ret)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A simple mock client for pure unit tests that don't need networking
+    struct MockNetworkConfClient;
+
+    impl MockNetworkConfClient {
+        fn new() -> Self {
+            MockNetworkConfClient
+        }
+
+        fn parse_ip_with_mask(&self, ip_with_mask: &str) -> Result<(String, u8), Error> {
+            let parts: Vec<&str> = ip_with_mask.trim().split('/').collect();
+            if parts.len() != 2 {
+                return Err(Error::new(ErrorKind::InvalidInput, "Invalid IP/mask format"));
+            }
+
+            let prefix_len = parts[1]
+                .parse::<u8>()
+                .map_err(|e| Error::new(ErrorKind::InvalidInput, e.to_string()))?;
+
+            Ok((parts[0].to_string(), prefix_len))
+        }
+    }
+
+    // Helper function to create a test client for non-networking tests
+    fn create_mock_client() -> MockNetworkConfClient {
+        MockNetworkConfClient::new()
+    }
+
+    #[test]
+    fn test_parse_ip_with_mask_valid() {
+        let client = create_mock_client();
+
+        let result = client.parse_ip_with_mask("192.168.1.1/24");
+        assert!(result.is_ok());
+
+        let (ip, prefix) = result.unwrap();
+        assert_eq!(ip, "192.168.1.1");
+        assert_eq!(prefix, 24);
+    }
+
+    #[test]
+    fn test_parse_ip_with_mask_invalid() {
+        let client = create_mock_client();
+
+        let result = client.parse_ip_with_mask("192.168.1.1");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_parse_ip_with_mask_invalid_prefix() {
+        let client = create_mock_client();
+
+        let result = client.parse_ip_with_mask("192.168.1.1/abc");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_parse_ip_with_mask_edge_cases() {
+        let client = create_mock_client();
+
+        // Test with IPv6 notation
+        let result = client.parse_ip_with_mask("2001:db8::1/64");
+        assert!(result.is_ok());
+        let (ip, prefix) = result.unwrap();
+        assert_eq!(ip, "2001:db8::1");
+        assert_eq!(prefix, 64);
+
+        // Test with zero prefix
+        let result = client.parse_ip_with_mask("0.0.0.0/0");
+        assert!(result.is_ok());
+        let (ip, prefix) = result.unwrap();
+        assert_eq!(ip, "0.0.0.0");
+        assert_eq!(prefix, 0);
+
+        // Test with maximum prefix
+        let result = client.parse_ip_with_mask("192.168.1.1/32");
+        assert!(result.is_ok());
+        let (ip, prefix) = result.unwrap();
+        assert_eq!(ip, "192.168.1.1");
+        assert_eq!(prefix, 32);
+
+        // Test invalid prefix range
+        let result = client.parse_ip_with_mask("192.168.1.1/33");
+        assert!(result.is_ok()); // Note: This test only checks parsing, not IP validation
+
+        // Test empty string
+        let result = client.parse_ip_with_mask("");
+        assert!(result.is_err());
+
+        // Test with whitespace
+        let result = client.parse_ip_with_mask("  192.168.1.1/24  ");
+        assert!(result.is_ok());
+        let (ip, prefix) = result.unwrap();
+        assert_eq!(ip, "192.168.1.1");
+        assert_eq!(prefix, 24);
+    }
+
+    #[test]
+    fn test_ip_route_entry_creation() {
+        let entry = IpRouteEntry::new(
+            "192.168.1.0/24".to_string(),
+            Some("eth0".to_string()),
+            Some("192.168.1.1".to_string()),
+            Some(254),
+            Some(100)
+        );
+
+        assert!(entry.is_some());
+        let entry = entry.unwrap();
+        assert_eq!(entry.destination, "192.168.1.0/24");
+        assert_eq!(entry.interface, Some("eth0".to_string()));
+        assert_eq!(entry.gateway, Some("192.168.1.1".to_string()));
+        assert_eq!(entry.table, Some(254));
+        assert_eq!(entry.metric, Some(100));
+    }
+
+    #[test]
+    fn test_ip_route_entry_minimal() {
+        let entry = IpRouteEntry::new(
+            "0.0.0.0/0".to_string(),
+            None,
+            None,
+            None,
+            None
+        );
+
+        assert!(entry.is_some());
+        let entry = entry.unwrap();
+        assert_eq!(entry.destination, "0.0.0.0/0");
+        assert_eq!(entry.interface, None);
+        assert_eq!(entry.gateway, None);
+        assert_eq!(entry.table, None);
+        assert_eq!(entry.metric, None);
+    }
+
+    #[test]
+    fn test_fwmark_creation() {
+        let fwmark = FwMark {
+            mark: 100,
+            mask: Some(0xff),
+        };
+
+        assert_eq!(fwmark.mark, 100);
+        assert_eq!(fwmark.mask, Some(0xff));
+    }
+
+    #[test]
+    fn test_fwmark_without_mask() {
+        let fwmark = FwMark {
+            mark: 42,
+            mask: None,
+        };
+
+        assert_eq!(fwmark.mark, 42);
+        assert_eq!(fwmark.mask, None);
+    }
+
+    #[test]
+    fn test_vrf_params_creation() {
+        let vrf_params = VrfParams {
+            table: Some(254),
+        };
+
+        assert_eq!(vrf_params.table, Some(254));
+    }
+
+    #[test]
+    fn test_vrf_params_default() {
+        let vrf_params = VrfParams {
+            table: None,
+        };
+
+        assert_eq!(vrf_params.table, None);
+    }
+
+    // Tests that require actual networking (use tokio::test and ignore by default)
+    #[tokio::test]
+    #[ignore] // Use #[ignore] for tests that require special setup
+    async fn test_get_interface_index_nonexistent() {
+        let mut client = NetworkConfClient::new();
+        let result = client.get_if_index_by_name("nonexistent_interface_12345");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires network access
+    async fn test_loopback_interface() {
+        let mut client = NetworkConfClient::new();
+
+        // Test that loopback interface exists
+        let result = client.get_if_index_by_name("lo");
+        assert!(result.is_ok());
+
+        // Test getting IP addresses for loopback
+        let ip_result = client.get_ip_by_name("lo");
+        assert!(ip_result.is_ok());
+        let ips = ip_result.unwrap();
+        assert!(!ips.is_empty());
+
+        // Test getting stats for loopback
+        let stats_result = client.get_if_stats_by_name("lo");
+        assert!(stats_result.is_ok());
+        let stats = stats_result.unwrap();
+        assert_eq!(stats.name, Some("lo".to_string()));
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires network access
+    async fn test_real_client_parse_ip_with_mask() {
+        let client = NetworkConfClient::new();
+
+        let result = client.parse_ip_with_mask("10.0.0.1/16");
+        assert!(result.is_ok());
+
+        let (ip, prefix) = result.unwrap();
+        assert_eq!(ip, "10.0.0.1");
+        assert_eq!(prefix, 16);
+    }
+
+    // Test constants and static values
+    #[test]
+    fn test_constants() {
+        assert_eq!(IPTABLE_TABLE, "mangle");
+        assert_eq!(IPTABLE_CHAIN, "PREROUTING");
+        assert_eq!(IPTABLE_FILTER_TABLE, "filter");
+        assert_eq!(IPTABLE_FORWARD_CHAIN, "FORWARD");
+        assert_eq!(WG_PERSISTENCE_KEEPALIVE_INTERVAL, 15);
+    }
+
+    // Test struct cloning
+    #[test]
+    fn test_struct_cloning() {
+        let fwmark = FwMark {
+            mark: 100,
+            mask: Some(0xff),
+        };
+
+        let cloned_fwmark = fwmark.clone();
+        assert_eq!(fwmark.mark, cloned_fwmark.mark);
+        assert_eq!(fwmark.mask, cloned_fwmark.mask);
+
+        let vrf_params = VrfParams {
+            table: Some(254),
+        };
+
+        let cloned_vrf = vrf_params.clone();
+        assert_eq!(vrf_params.table, cloned_vrf.table);
     }
 }

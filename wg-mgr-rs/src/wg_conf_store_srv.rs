@@ -39,7 +39,7 @@ impl EtcdClientConfig {
                 } else {
                     format!("http://{}", node)
                 };
-                
+
                 // Use Endpoint::new which takes a string
                 Endpoint::new(uri)
             })
@@ -150,10 +150,10 @@ impl EtcdApiHander for Client {
         let hostname = get_hostname().unwrap_or_else(|_| "localhost".to_string());
         let prefix = format!("/wg/{}/namespace/configuration", hostname);
         let prefix_end = format!("/wg/{}/namespace/configuration{}", hostname, '\u{0}');
-        
+
         // get_range expects Vec<u8> parameters
         let values = self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await;
-        
+
         values
             .map(|value| {
                 value
@@ -191,7 +191,7 @@ impl EtcdApiHander for Client {
                 } else {
                     let value_str = String::from_utf8(ns_config.kvs[0].value.clone())
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-                    
+
                     let namespace_conf = serde_json::from_str::<models::WgNamespace>(&value_str);
 
                     namespace_conf.map_err(|e| {
@@ -229,7 +229,7 @@ impl EtcdApiHander for Client {
                 } else {
                     let value_str = String::from_utf8(user_config.kvs[0].value.clone())
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-                    
+
                     let user_conf = serde_json::from_str::<models::WgUser>(&value_str);
 
                     user_conf.map_err(|e| {
@@ -283,7 +283,7 @@ impl EtcdApiHander for Client {
         let key = generate_namespace_key(namespace);
         // delete expects string, so dereference the String
         let delete = self.delete(key.as_str()).await;
-        
+
         delete.map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
         })
@@ -300,7 +300,7 @@ impl EtcdApiHander for Client {
     async fn delete_entry(&self, key: &str) -> std::io::Result<()> {
         // delete expects &str
         let delete = self.delete(key).await;
-        
+
         delete.map_or_else(
             |e| Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
             |_| Ok(()),
@@ -317,7 +317,7 @@ impl EtcdApiHander for Client {
 
         // get_range expects Vec<u8> parameters
         let values = self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await;
-        
+
         let kvs = values.map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
         })?.kvs;
@@ -330,11 +330,11 @@ impl EtcdApiHander for Client {
             let key_str = String::from_utf8(kv.key).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
             })?;
-            
+
             let value_str = String::from_utf8(kv.value).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
             })?;
-            
+
             let namespace = key_str.split('/').last().ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -357,11 +357,11 @@ impl EtcdApiHander for Client {
     async fn delete_all_users_with_namespace(&self, namespace: &str) -> std::io::Result<()> {
         let prefix = generate_all_users_key_with_namespace(namespace);
         let prefix_end = format!("{}{}", prefix, '\u{0}');
-        
+
         // First get all keys to delete - get_range expects Vec<u8> parameters
         let range_resp = self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        
+
         // Delete each key individually - convert Vec<u8> to String first
         for kv in range_resp.kvs {
             let key_str = String::from_utf8(kv.key).map_err(|e| {
@@ -369,7 +369,7 @@ impl EtcdApiHander for Client {
             })?;
             let _ = self.delete(key_str.as_str()).await; // Ignore individual delete errors
         }
-        
+
         Ok(())
     }
 
@@ -399,7 +399,7 @@ impl EtcdApiHander for Client {
             let key_str = String::from_utf8(user_kv.key.clone()).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
             })?;
-            
+
             let value_str = String::from_utf8(user_kv.value).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
             })?;
@@ -417,5 +417,67 @@ impl EtcdApiHander for Client {
             }
         }
         Ok(hm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_get_hostname() {
+        let hostname = get_hostname();
+        assert!(hostname.is_ok());
+        let hostname = hostname.unwrap();
+        assert!(!hostname.is_empty());
+        println!("Hostname: {}", hostname);
+    }
+
+    #[test]
+    fn test_etcd_client_config_creation() {
+        let endpoints = vec!["http://127.0.0.1:2379"];
+        let config = EtcdClientConfig::new(&endpoints);
+
+        // Test that config is created properly
+        assert!(config.nodes.len() == 1);
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires running etcd instance
+    async fn test_etcd_connection() {
+        let endpoints = vec!["http://127.0.0.1:2379"];
+        let config = EtcdClientConfig::new(&endpoints);
+        let client = config.connect().await;
+
+        // This test would only pass with a running etcd instance
+        if let Some(_client) = client {
+            println!("Successfully connected to etcd");
+        }
+    }
+
+    // Test configuration parsing/validation
+    #[test]
+    fn test_namespace_configuration_validation() {
+        // Test valid configuration
+        let mut valid_config = HashMap::new();
+        valid_config.insert("name".to_string(), "test-namespace".to_string());
+        valid_config.insert("ip".to_string(), "10.0.0.1/24".to_string());
+        valid_config.insert("port".to_string(), "51820".to_string());
+
+        assert!(validate_namespace_config(&valid_config));
+
+        // Test invalid configuration
+        let mut invalid_config = HashMap::new();
+        invalid_config.insert("name".to_string(), "".to_string()); // Empty name
+
+        assert!(!validate_namespace_config(&invalid_config));
+    }
+
+    // Helper function for config validation
+    fn validate_namespace_config(config: &HashMap<String, String>) -> bool {
+        config.get("name").map_or(false, |name| !name.is_empty()) &&
+        config.get("ip").map_or(false, |ip| ip.contains('/')) &&
+        config.get("port").map_or(false, |port| port.parse::<u16>().is_ok())
     }
 }

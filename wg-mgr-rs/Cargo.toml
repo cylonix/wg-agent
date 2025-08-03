@@ -1,0 +1,29 @@
+[package]
+name = "wg-mgr-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1.88"
+futures = "0.3"
+iptables = "0.5"
+cidr-utils = "0.6"
+etcd-rs = "1.0.1"
+hostname = "0.3"
+hyper = { version = "0.14", features = ["full"] }
+log = "0.4"
+serde_json = "1.0"
+swagger = "6.5.1"
+systemstat = "0.2.5"
+tokio = { version = "1.0", features = ["full"] }
+
+# Netlink crates
+rtnetlink = "0.17"
+
+# Other dependencies
+wg-api = {path = "../wg-mgr-api", features = ["server"]}
+wg-rs = { path = "../wg-rs" }
+libc = "0.2.174"
+netlink-packet-route = "0.24.0"
+pretty_env_logger = "0.5.0"
+clap = "4.5.42"

@@ -1,0 +1,27 @@
+[package]
+authors = ["Cylonix authors <contact@cylonix.io>"]
+edition = "2021"
+name = "wg-rs"
+version = "0.1.0"
+
+[dependencies]
+base64 = "0.21"
+cidr-utils = "0.6"
+libc = "0.2"
+log = "0.4"
+rand = "0.8"
+wg-sys = {path = "../wg-sys"}
+
+# Netlink crates
+rtnetlink = "0.14"
+netlink-packet-route = "0.19"
+netlink-sys = "0.8"
+futures = "0.3"
+
+# Tokio for async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+[[example]]
+name = "wg_rust"
+[[example]]
+name = "wg_collect"

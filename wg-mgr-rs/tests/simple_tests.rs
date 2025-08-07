@@ -156,10 +156,10 @@ async fn test_real_client_ip_parsing() {
 #[tokio::test]
 #[ignore] // Requires network access
 async fn test_loopback_interface_basic() {
-    let mut client = NetworkConfClient::new();
+    let client = NetworkConfClient::new();
 
     // Test that loopback interface exists
-    let result = client.get_if_index_by_name("lo");
+    let result = client.get_if_index_by_name("lo").await;
     assert!(result.is_ok());
     let lo_index = result.unwrap();
     assert!(lo_index > 0);

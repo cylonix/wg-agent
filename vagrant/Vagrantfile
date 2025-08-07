@@ -1,0 +1,267 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Vagrantfile for WireGuard Manager Testing Environment
+# - 1 server VM running the wg-mgr-rs service
+# - 4 client VMs connecting to the service (2 in the same namespace/VRF)
+
+Vagrant.configure("2") do |config|
+  # Base configuration for all VMs
+  config.vm.box = "generic/ubuntu2004"
+
+  # Basic SSH configuration
+  config.vm.boot_timeout = 600
+
+  # Provider-specific settings
+  config.vm.provider "libvirt" do |lv|
+    lv.memory = 1024
+    lv.cpus = 1
+  end
+
+  # Server VM - runs the wg-mgr-rs service
+  config.vm.define "wg-server" do |server|
+    server.vm.hostname = "wg-server"
+    server.vm.network "private_network", ip: "192.168.50.10"
+
+    # Additional resources for the server
+    server.vm.provider "libvirt" do |lv|
+      lv.memory = 2048
+      lv.cpus = 2
+    end
+
+    # Synced folder for the wg-agent code
+    server.vm.synced_folder "../", "/wg-agent", type: "rsync",
+      rsync__exclude: [".git/", "target/", "node_modules/"]
+
+    # Provision the server with necessary tools and dependencies
+    server.vm.provision "shell", inline: <<-SHELL
+      echo "Provisioning WireGuard Manager server..."
+      apt-get update
+      apt-get install -y wireguard-tools sudo curl etcd iptables \
+        build-essential pkg-config binutils libssl-dev \
+        protobuf-compiler
+
+      # Install LLVM and its linker
+      apt-get install -y llvm lld clang
+    SHELL
+
+    # Build wg-agent service executable
+    # Build as non-root to be able to update the service later
+    server.vm.provision "shell", privileged: false, inline: <<-SHELL
+      # Install Rust
+      if ! command -v cargo &> /dev/null; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source $HOME/.cargo/env
+      fi
+      # Try to build the service
+      cd /wg-agent/wg-mgr-rs
+      source $HOME/.cargo/env
+      cargo build
+      sudo cp target/debug/main /usr/bin/wg-agent
+    SHELL
+
+    # Create systemd service for wg-mgr-rs
+    server.vm.provision "shell", inline: <<-SHELL
+      # Create systemd service for wg-mgr-rs
+      cat > /etc/default/wg-agent <<EOF
+RUST_LOG=debug
+EOF
+      cat > /etc/systemd/system/wg-agent.service <<EOF
+[Unit]
+Description=WireGuard Agent Service
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/default/wg-agent
+ExecStart=/usr/bin/wg-agent
+Restart=on-failure
+User=root
+Group=root
+WorkingDirectory=/wg-agent/wg-mgr-rs
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+      # Start etcd
+      systemctl enable etcd
+      systemctl start etcd
+
+      # Enable and start the service
+      systemctl enable wg-agent
+      systemctl start wg-agent
+
+      # Enable IP forwarding
+      echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-ip-forward.conf
+      sysctl -p /etc/sysctl.d/99-ip-forward.conf
+
+      # Generate WireGuard keys
+      mkdir -p /etc/wireguard
+      wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+      chmod 600 /etc/wireguard/privatekey
+
+      echo "WireGuard Manager server setup complete!"
+      echo "Server public key: $(cat /etc/wireguard/publickey)"
+    SHELL
+  end
+
+  # Client VMs - Namespace 1, VRF 1
+  config.vm.define "client1" do |client|
+    client.vm.hostname = "client1"
+    client.vm.network "private_network", ip: "192.168.50.21"
+
+    client.vm.provision "shell", inline: <<-SHELL
+      echo "Provisioning WireGuard Client 1 (Namespace 1, VRF 1)..."
+      apt-get update
+      apt-get install -y wireguard-tools sudo curl iproute2
+
+      # Create client configuration
+      mkdir -p /etc/wireguard
+
+      # Generate private key
+      wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+      chmod 600 /etc/wireguard/privatekey
+
+      # Create WireGuard configuration
+      cat > /etc/wireguard/wg0.conf <<EOF
+[Interface]
+PrivateKey = $(cat /etc/wireguard/privatekey)
+Address = 10.10.10.21/24
+ListenPort = 51820
+
+[Peer]
+PublicKey = # Will be filled by the server setup
+Endpoint = 192.168.50.10:51820
+AllowedIPs = 10.10.10.0/24
+PersistentKeepalive = 25
+EOF
+
+      # Enable IP forwarding
+      echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-ip-forward.conf
+      sysctl -p /etc/sysctl.d/99-ip-forward.conf
+
+      echo "Client 1 setup complete! Namespace: 1, VRF: 1"
+      echo "Public key: $(cat /etc/wireguard/publickey)"
+    SHELL
+  end
+
+  # Client VMs - Namespace 1, VRF 1 (same as client1)
+  config.vm.define "client2" do |client|
+    client.vm.hostname = "client2"
+    client.vm.network "private_network", ip: "192.168.50.22"
+
+    client.vm.provision "shell", inline: <<-SHELL
+      echo "Provisioning WireGuard Client 2 (Namespace 1, VRF 1)..."
+      apt-get update
+      apt-get install -y wireguard-tools sudo curl iproute2
+
+      # Create client configuration
+      mkdir -p /etc/wireguard
+
+      # Generate private key
+      wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+      chmod 600 /etc/wireguard/privatekey
+
+      # Create WireGuard configuration
+      cat > /etc/wireguard/wg0.conf <<EOF
+[Interface]
+PrivateKey = $(cat /etc/wireguard/privatekey)
+Address = 10.10.10.22/24
+ListenPort = 51820
+
+[Peer]
+PublicKey = # Will be filled by the server setup
+Endpoint = 192.168.50.10:51820
+AllowedIPs = 10.10.10.0/24
+PersistentKeepalive = 25
+EOF
+
+      # Enable IP forwarding
+      echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-ip-forward.conf
+      sysctl -p /etc/sysctl.d/99-ip-forward.conf
+
+      echo "Client 2 setup complete! Namespace: 1, VRF: 1"
+      echo "Public key: $(cat /etc/wireguard/publickey)"
+    SHELL
+  end
+
+  # Client VMs - Namespace 2, VRF 2
+  config.vm.define "client3" do |client|
+    client.vm.hostname = "client3"
+    client.vm.network "private_network", ip: "192.168.50.23"
+
+    client.vm.provision "shell", inline: <<-SHELL
+      echo "Provisioning WireGuard Client 3 (Namespace 2, VRF 2)..."
+      apt-get update
+      apt-get install -y wireguard-tools sudo curl iproute2
+
+      # Create client configuration
+      mkdir -p /etc/wireguard
+
+      # Generate private key
+      wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+      chmod 600 /etc/wireguard/privatekey
+
+      # Create WireGuard configuration
+      cat > /etc/wireguard/wg0.conf <<EOF
+[Interface]
+PrivateKey = $(cat /etc/wireguard/privatekey)
+Address = 10.20.20.23/24
+ListenPort = 51820
+
+[Peer]
+PublicKey = # Will be filled by the server setup
+Endpoint = 192.168.50.10:51820
+AllowedIPs = 10.20.20.0/24
+PersistentKeepalive = 25
+EOF
+
+      # Enable IP forwarding
+      echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-ip-forward.conf
+      sysctl -p /etc/sysctl.d/99-ip-forward.conf
+
+      echo "Client 3 setup complete! Namespace: 2, VRF: 2"
+      echo "Public key: $(cat /etc/wireguard/publickey)"
+    SHELL
+  end
+
+  # Client VMs - Namespace 3, VRF 3
+  config.vm.define "client4" do |client|
+    client.vm.hostname = "client4"
+    client.vm.network "private_network", ip: "192.168.50.24"
+
+    client.vm.provision "shell", inline: <<-SHELL
+      echo "Provisioning WireGuard Client 4 (Namespace 3, VRF 3)..."
+      apt-get update
+      apt-get install -y wireguard-tools sudo curl iproute2
+
+      # Create client configuration
+      mkdir -p /etc/wireguard
+
+      # Generate private key
+      wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+      chmod 600 /etc/wireguard/privatekey
+
+      # Create WireGuard configuration
+      cat > /etc/wireguard/wg0.conf <<EOF
+[Interface]
+PrivateKey = $(cat /etc/wireguard/privatekey)
+Address = 10.30.30.24/24
+ListenPort = 51820
+
+[Peer]
+PublicKey = # Will be filled by the server setup
+Endpoint = 192.168.50.10:51820
+AllowedIPs = 10.30.30.0/24
+PersistentKeepalive = 25
+EOF
+
+      # Enable IP forwarding
+      echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-ip-forward.conf
+      sysctl -p /etc/sysctl.d/99-ip-forward.conf
+
+      echo "Client 4 setup complete! Namespace: 3, VRF: 3"
+      echo "Public key: $(cat /etc/wireguard/publickey)"
+    SHELL
+  end
+end

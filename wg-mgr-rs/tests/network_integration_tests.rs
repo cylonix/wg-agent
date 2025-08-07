@@ -52,17 +52,17 @@ impl MockNetworkConfClient {
 async fn test_vrf_lifecycle() {
     skip_if_not_root!();
 
-    let mut client = NetworkConfClient::new();
+    let client = NetworkConfClient::new();
     let vrf_name = create_test_interface_name();
 
     // Create VRF - Note: Using direct method call instead of trait
-    let result = client.create_vrf_interface(vrf_name.clone(), 100);
+    let result = client.create_vrf_interface(vrf_name.clone(), 100).await;
     if result.is_ok() {
         let vrf_index = result.unwrap();
         assert!(vrf_index > 0);
 
         // Cleanup
-        let delete_result = client.delete_vrf_interface(vrf_name);
+        let delete_result = client.delete_vrf_interface(vrf_name).await;
         assert!(delete_result.is_ok());
     } else {
         println!("VRF creation failed (may require kernel VRF support): {:?}", result.err());
@@ -72,21 +72,21 @@ async fn test_vrf_lifecycle() {
 #[tokio::test]
 #[ignore]
 async fn test_loopback_interface_info() {
-    let mut client = NetworkConfClient::new();
+    let client = NetworkConfClient::new();
 
     // Test that loopback interface exists
-    let result = client.get_if_index_by_name("lo");
+    let result = client.get_if_index_by_name("lo").await;
     assert!(result.is_ok());
 
     // Test getting IP addresses for loopback
-    let ip_result = client.get_ip_by_name("lo");
+    let ip_result = client.get_ip_by_name("lo").await;
     assert!(ip_result.is_ok());
     let ips = ip_result.unwrap();
     assert!(!ips.is_empty());
     println!("Loopback IPs: {:?}", ips);
 
     // Test getting stats for loopback
-    let stats_result = client.get_if_stats_by_name("lo");
+    let stats_result = client.get_if_stats_by_name("lo").await;
     assert!(stats_result.is_ok());
     let stats = stats_result.unwrap();
     assert_eq!(stats.name, Some("lo".to_string()));
@@ -134,10 +134,10 @@ fn test_ip_parsing() {
 #[tokio::test]
 #[ignore]
 async fn test_interface_enumeration() {
-    let mut client = NetworkConfClient::new();
+    let client = NetworkConfClient::new();
 
     // Test that loopback interface exists by getting its index
-    let result = client.get_if_index_by_name("lo");
+    let result = client.get_if_index_by_name("lo").await;
     assert!(result.is_ok());
     let lo_index = result.unwrap();
     assert!(lo_index > 0);

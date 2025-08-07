@@ -7,7 +7,8 @@ extern crate log;
 extern crate pretty_env_logger;
 
 use clap::{Arg, Command};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use futures::StreamExt;
 use wg_mgr_rs::wg_api_server;
 use wg_mgr_rs::wg_conf_server;

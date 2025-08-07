@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use wg_mgr_rs::wg_network_conf_srv::NetworkConfClient;
 use std::time::{SystemTime, UNIX_EPOCH};
 

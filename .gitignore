@@ -64,3 +64,6 @@ wg-mgr-api/
 api/
 
 wg.yaml
+
+# Vagrant
+vagrant/.vagrant

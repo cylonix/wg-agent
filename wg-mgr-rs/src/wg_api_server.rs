@@ -5,8 +5,9 @@
 use log::*;
 use std::marker::PhantomData;
 use std::net::{SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::convert::Infallible;
+use tokio::sync::Mutex;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server as HyperServer, StatusCode};
 use serde_json;
@@ -468,7 +469,7 @@ where
         if let Some(namespaces) = wg_namespace {
             let mut details = Vec::new();
             for ns in namespaces {
-                if let Ok(detail) = self.get_namespace_detail(&ns.name) {
+                if let Ok(detail) = self.get_namespace_detail(&ns.name).await {
                     details.push(detail);
                 }
             }
@@ -479,7 +480,7 @@ where
             if let Some(namespaces) = all_namespaces {
                 let mut details = Vec::new();
                 for namespace_name in namespaces {
-                    if let Ok(detail) = self.get_namespace_detail(&namespace_name) {
+                    if let Ok(detail) = self.get_namespace_detail(&namespace_name).await {
                         details.push(detail);
                     }
                 }

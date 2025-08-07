@@ -9,7 +9,8 @@ use etcd_rs::Client;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::string::String;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use wg_api::models::*;
 #[derive(Clone)]
 pub struct ConfServer {

@@ -481,6 +481,7 @@ impl CryptoCell for SharedKey {
 #[derive(Clone)]
 pub struct WgPeer {
     pub public_key: Option<Box<Vec<u8>>>,
+    pub public_key_base64: Option<String>,
     pub preshared_key: Option<Box<Vec<u8>>>,
     pub endpoint: Option<libc::sockaddr_in>,
     pub last_handshake_time: Option<i64>,
@@ -493,7 +494,7 @@ pub struct WgPeer {
 
 impl std::fmt::Debug for WgPeer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "pubkey:{:?}", self.public_key)?;
+        writeln!(f, "pubkey:{:?}", self.public_key_base64)?;
         writeln!(f, "preshared_key:{:?}", self.preshared_key)?;
         writeln!(f, "rx_bytes:{:?}", self.rx_bytes)?;
         writeln!(f, "tx_bytes:{:?}", self.tx_bytes)?;
@@ -505,6 +506,7 @@ impl WgPeer {
     pub fn new() -> WgPeer {
         WgPeer {
             public_key: None,
+            public_key_base64: None,
             preshared_key: None,
             endpoint: None,
             last_handshake_time: None,
@@ -520,6 +522,7 @@ impl WgPeer {
         match general_purpose::STANDARD.decode(key) {
             Ok(decoded) => {
                 self.public_key = Some(Box::new(decoded));
+                self.public_key_base64 = Some(key.to_string());
                 Ok(self)
             }
             Err(e) => Err(Error::new(ErrorKind::InvalidData, e.to_string())),
@@ -550,7 +553,9 @@ impl WgPeer {
     where
         T: Into<&'a [u8]>,
     {
-        self.public_key = Some(Box::new(Into::<&[u8]>::into(key).to_vec()));
+        let bytes = Into::<&[u8]>::into(key).to_vec();
+        self.public_key = Some(Box::new(bytes.clone()));
+        self.public_key_base64 = Some(general_purpose::STANDARD.encode(bytes));
         self
     }
 
@@ -937,7 +942,7 @@ impl Into<WgPeerIntermediteState> for &WgPeer {
                                 allowed_ip.next_allowedip = std::ptr::null_mut();
                                 allowed_ip.__bindgen_anon_1 = wgallowedip__bindgen_ty_1 {
                                     ip4: in_addr {
-                                        s_addr: ipv4_cidr.first_address().to_bits(),
+                                        s_addr: ipv4_cidr.first_address().to_bits().to_be(),
                                     },
                                 };
 
@@ -1022,7 +1027,7 @@ impl From<&wgpeer> for WgPeer {
 
             unsafe {
                 // Create Ipv4Cidr from network address and prefix length using from_str
-                let network_addr = Ipv4Addr::from((*current).__bindgen_anon_1.ip4.s_addr.to_be());
+                let network_addr = Ipv4Addr::from(u32::from_be((*current).__bindgen_anon_1.ip4.s_addr));
                 let prefix_len = (*current).cidr;
                 
                 if let Ok(ipv4_cidr) = Ipv4Cidr::from_str(&format!("{}/{}", network_addr, prefix_len)) {

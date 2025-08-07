@@ -1076,7 +1076,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         key: &String,
         allowed_ips: &Option<Vec<String>>
     ) -> Result<(), std::io::Error> {
-        debug!("Creating wireguard peer for {}/{}", name, key);
+        debug!("Creating wireguard peer for {}/{} with allowed_ips {:?}", name, key, allowed_ips);
         let client = self.as_ref().lock().await;
 
         let if_index = client.get_if_index_by_name(name).await?;
@@ -1094,12 +1094,13 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
                     .iter()
                     .map(|a| a.as_str())
                     .collect();
+                debug!("allowed_ips {:?}", ips_slice);
                 add_wireguard_peer(
                     &name_clone,
                     None,
                     Some(if_index),
                     Some(WG_PERSISTENCE_KEEPALIVE_INTERVAL),
-                    ips_slice.as_slice(),
+                    &ips_slice[..],
                     &key_clone
                 )
             }

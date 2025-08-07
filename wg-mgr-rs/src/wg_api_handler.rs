@@ -92,7 +92,7 @@ impl<T> ApiHandler for T where T: AsRef<Client> + AsRef<Arc<Mutex<NetworkConfCli
             let _ = self
                 .delete_vxlan_interface(format!("vxlan_{}", vxlan.vid).as_str()).await
                 .map_err(|e| {
-                    warn!("Cannot delete vxlan interface {}: {}", vxlan.vid, e.to_string());
+                    warn!("Cannot delete vxlan interface vxlan_{}: {}", vxlan.vid, e.to_string());
                     // Ignore error as deletion is best effort
                 });
         }
@@ -100,7 +100,7 @@ impl<T> ApiHandler for T where T: AsRef<Client> + AsRef<Arc<Mutex<NetworkConfCli
         let _ = self
             .delete_vrf_interface(format!("vrf_{}", namespace_name).as_str()).await
             .map_err(|e| {
-                warn!("Cannot delete vrf interface {}: {}", namespace_name, e.to_string());
+                warn!("Cannot delete vrf interface vrf_{}: {}", namespace_name, e.to_string());
                 // Ignore error as deletion is best effort
             });
 
@@ -110,7 +110,7 @@ impl<T> ApiHandler for T where T: AsRef<Client> + AsRef<Arc<Mutex<NetworkConfCli
             e
         })?;
         etcd_client.delete_all_users_with_namespace(namespace_name.as_str()).await.map_err(|e| {
-            warn!("Cannot delete all users with namespace {}: {}", namespace_name, e.to_string());
+            warn!("Cannot delete all users for {}: {}", namespace_name, e.to_string());
             e
         })?;
         info!("Namespace {} deleted", namespace_name);
@@ -364,9 +364,8 @@ impl<T> ApiHandler for T where T: AsRef<Client> + AsRef<Arc<Mutex<NetworkConfCli
         }
 
         let table_id = ret.as_ref().unwrap().1;
-        let vrf_name = ret.as_ref().unwrap().0;
         debug!("{} table id: {}", namespace.name, table_id);
-        let ret = self.create_vrf_interface(format!("vrf_{}", vrf_name), table_id).await;
+        let ret = self.create_vrf_interface(format!("vrf_{}", namespace.name), table_id).await;
 
         // put the vxlan & wg interface into the vrf interface
         if let Err(e) = ret {

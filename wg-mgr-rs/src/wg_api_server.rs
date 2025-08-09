@@ -69,7 +69,7 @@ async fn handle_request(
     debug!("Handling {} {}", method, path);
 
     let response = match (method, path) {
-        (&Method::GET, "/health") => {
+        (&Method::GET, "/v1/health") => {
             match server.get_health_status(&context).await {
                 Ok(health) => {
                     let json = serde_json::to_string(&health).unwrap_or_default();
@@ -88,7 +88,7 @@ async fn handle_request(
                 }
             }
         }
-        (&Method::GET, "/system") => {
+        (&Method::GET, "/v1/system") => {
             match server.get_system_info(&context).await {
                 Ok(sys_info) => {
                     let json = serde_json::to_string(&sys_info).unwrap_or_default();
@@ -107,7 +107,7 @@ async fn handle_request(
                 }
             }
         }
-        (&Method::POST, "/namespaces") => {
+        (&Method::POST, "/v1/namespace") => {
             // Parse request body
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
             match serde_json::from_slice::<Vec<models::WgNamespace>>(&body_bytes) {
@@ -137,7 +137,7 @@ async fn handle_request(
                 }
             }
         }
-        (&Method::DELETE, "/namespaces") => {
+        (&Method::DELETE, "/v1/namespace") => {
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
             match serde_json::from_slice::<Vec<models::WgNamespace>>(&body_bytes) {
                 Ok(namespaces) => {
@@ -166,7 +166,7 @@ async fn handle_request(
                 }
             }
         }
-        (&Method::GET, "/namespaces") => {
+        (&Method::GET, "/v1/namespace") => {
             match server.list_namespaces(None, &context).await {
                 Ok(namespaces) => {
                     let json = serde_json::to_string(&namespaces).unwrap_or_default();
@@ -185,7 +185,7 @@ async fn handle_request(
                 }
             }
         }
-        (&Method::POST, "/users") => {
+        (&Method::POST, "/v1/user") => {
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
             match serde_json::from_slice::<Vec<models::WgUser>>(&body_bytes) {
                 Ok(users) => {
@@ -214,7 +214,7 @@ async fn handle_request(
                 }
             }
         }
-        (&Method::DELETE, "/users") => {
+        (&Method::DELETE, "/v1/users") => {
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
             match serde_json::from_slice::<Vec<models::WgUser>>(&body_bytes) {
                 Ok(users) => {

@@ -26,7 +26,7 @@ This Vagrant setup creates a 5-VM test environment for the WireGuard Manager ser
 2. After all VMs are running, run the test script:
 
    ```bash
-   ./setup_connections.sh
+   ./setup.sh
    ```
 
 ## VM Details
@@ -57,31 +57,18 @@ vagrant ssh wg-server -c 'sudo service wg-agent restart'
 ## Update code and rebuild for testing
 
 - update code first
-- then sync the code the wg-server vm:
+- then sync the code the wg-server vm and rebuild in the wg-server vm and restart service
 
   ```bash
   cd vagrant
-  vagrant rsync wg-server
-  ```
-
-- rebuild in the wg-server vm and restart service
-
-  ```bash
-  cd vagrant
-  vagrant ssh wg-server
-  # In wg-server console
-  cd /wg-agent/wg-mgr-rs
-  sudo systemctl stop wg-agent
-  cargo build
-  sudo cp target/debug/main /usr/bin/wg-agent
-  sudo systemctl start wg-agent
+  ./update.sh
   ```
 
 - re-test
 
   ```bash
   cd vagrant
-  ./setup_connections.sh
+  ./setup.sh
   ```
 
 ## Cleanup

@@ -131,7 +131,7 @@ ListenPort = 51820
 
 [Peer]
 PublicKey = # Will be filled by the server setup
-Endpoint = 192.168.50.10:51820
+Endpoint = 192.168.50.10:51223
 AllowedIPs = 10.10.10.0/24
 PersistentKeepalive = 25
 EOF
@@ -171,7 +171,7 @@ ListenPort = 51820
 
 [Peer]
 PublicKey = # Will be filled by the server setup
-Endpoint = 192.168.50.10:51820
+Endpoint = 192.168.50.10:51223
 AllowedIPs = 10.10.10.0/24
 PersistentKeepalive = 25
 EOF
@@ -211,7 +211,7 @@ ListenPort = 51820
 
 [Peer]
 PublicKey = # Will be filled by the server setup
-Endpoint = 192.168.50.10:51820
+Endpoint = 192.168.50.10:51224
 AllowedIPs = 10.20.20.0/24
 PersistentKeepalive = 25
 EOF
@@ -251,7 +251,7 @@ ListenPort = 51820
 
 [Peer]
 PublicKey = # Will be filled by the server setup
-Endpoint = 192.168.50.10:51820
+Endpoint = 192.168.50.10:51225
 AllowedIPs = 10.30.30.0/24
 PersistentKeepalive = 25
 EOF

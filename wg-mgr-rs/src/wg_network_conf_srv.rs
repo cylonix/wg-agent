@@ -17,8 +17,8 @@ use rtnetlink::{
 use netlink_packet_route::AddressFamily;
 use netlink_packet_route::address::{ AddressAttribute, AddressMessage };
 use netlink_packet_route::link::LinkAttribute;
+use netlink_packet_route::route::RouteAttribute;
 use netlink_packet_route::rule::RuleAttribute;
-use netlink_packet_route::route::{ RouteMessage, RouteHeader };
 use futures::stream::TryStreamExt;
 use std::io::{ Error, ErrorKind };
 use std::net::{ IpAddr, Ipv4Addr };
@@ -35,10 +35,10 @@ use wg_rs::{
     WgPeer,
 };
 
-const IPTABLE_TABLE: &str = "mangle";
-const IPTABLE_CHAIN: &str = "PREROUTING";
+const IPTABLE_MANGLE_TABLE: &str = "mangle";
 const IPTABLE_FILTER_TABLE: &str = "filter";
 const IPTABLE_FORWARD_CHAIN: &str = "FORWARD";
+const IPTABLE_PREROUTING_CHAIN: &str = "PREROUTING";
 const WG_PERSISTENCE_KEEPALIVE_INTERVAL: u16 = 15;
 
 #[derive(Debug, Clone)]
@@ -153,44 +153,15 @@ impl NetworkConfClient {
         Ok(ips)
     }
 
-    pub fn create_fwmark_entry(
+    pub fn create_iptable_fwmark_entry(
         &self,
-        src_intf: String,
-        src_ip: String,
-        fwmark: u32
-    ) -> std::io::Result<()> {
-        let filter = format!("-i {} -s {} -j MARK --set-mark {}", src_intf, src_ip, fwmark);
-        self.iptable.append_unique(IPTABLE_TABLE, IPTABLE_CHAIN, &filter).map_err(|e| {
-            let err_string = e.to_string();
-            err_string.find("exists").map_or_else(
-                || Error::new(ErrorKind::InvalidData, e.to_string()),
-                |_| Error::new(ErrorKind::AlreadyExists, err_string)
-            )
-        })
-    }
-
-    pub fn delete_fwmark_entry(
-        &self,
-        src_intf: String,
-        src_ip: String,
+        src_intf: &str,
+        src_ip: &str,
         fwmark: u32
     ) -> std::io::Result<()> {
         let filter = format!("-i {} -s {} -j MARK --set-mark {}", src_intf, src_ip, fwmark);
         self.iptable
-            .delete(IPTABLE_TABLE, IPTABLE_CHAIN, &filter)
-            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
-    }
-
-    pub fn create_iptable_filter_forward_entry(
-        &self,
-        src_ip: String,
-        direction: String
-    ) -> std::io::Result<()> {
-        let direction_symbol = if direction == "source" { "s" } else { "d" };
-        let filter = format!("-{} {} -j ACCEPT", direction_symbol, src_ip);
-
-        self.iptable
-            .append_unique(IPTABLE_FILTER_TABLE, IPTABLE_FORWARD_CHAIN, &filter)
+            .append_unique(IPTABLE_MANGLE_TABLE, IPTABLE_PREROUTING_CHAIN, &filter)
             .map_err(|e| {
                 let err_string = e.to_string();
                 err_string.find("exists").map_or_else(
@@ -200,25 +171,57 @@ impl NetworkConfClient {
             })
     }
 
-    pub fn delete_iptable_filter_forward_entry(
+    pub fn delete_iptable_fwmark_entry(
         &self,
-        src_ip: String,
-        direction: String
+        src_intf: &str,
+        src_ip: &str,
+        fwmark: u32
     ) -> std::io::Result<()> {
-        let direction_symbol = if direction == "source" { "s" } else { "d" };
-        let filter = format!("-{} {} -j ACCEPT", direction_symbol, src_ip);
+        let filter = format!("-i {} -s {} -j MARK --set-mark {}", src_intf, src_ip, fwmark);
         self.iptable
-            .delete(IPTABLE_FILTER_TABLE, IPTABLE_FORWARD_CHAIN, &filter)
+            .delete(IPTABLE_MANGLE_TABLE, IPTABLE_PREROUTING_CHAIN, &filter)
             .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
     }
 
-    pub async fn create_vrf_interface(&self, name: String, table_id: u32) -> std::io::Result<u32> {
+    pub fn create_iptable_rule(
+        &self,
+        table: &str,
+        chain: &str,
+        rule: &str,
+        ok_if_exists: bool
+    ) -> std::io::Result<()> {
+        self.iptable.append_unique(table, chain, rule).map_or_else(
+            |e| {
+                e.to_string()
+                    .find("exists")
+                    .map_or_else(
+                        || Err(Error::new(ErrorKind::InvalidData, e.to_string())),
+                        |_| (
+                            if ok_if_exists {
+                                Ok(())
+                            } else {
+                                Err(Error::new(ErrorKind::AlreadyExists, e.to_string()))
+                            }
+                        )
+                    )
+            },
+            |_| { Ok(()) }
+        )
+    }
+
+    pub fn delete_iptable_rule(&self, table: &str, chain: &str, rule: &str) -> std::io::Result<()> {
+        self.iptable
+            .delete(table, chain, rule)
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
+    }
+
+    pub async fn create_vrf_interface(&self, name: &str, table_id: u32) -> std::io::Result<u32> {
         match
             self.handle
                 .as_ref()
                 .unwrap()
                 .link()
-                .add(LinkVrf::new(&name, table_id).up().build())
+                .add(LinkVrf::new(name, table_id).up().build())
                 .execute().await
         {
             Ok(_) => info!("Successfully created VRF interface {}", name),
@@ -230,7 +233,7 @@ impl NetworkConfClient {
             }
         }
 
-        let if_index = self.get_if_index_by_name(&name).await?;
+        let if_index = self.get_if_index_by_name(name).await?;
         if let Err(e) = self.set_interface_up(if_index).await {
             warn!("Failed to set vrf interface {} up (this is often expected): {}", name, e);
             // Continue anyway as this isn't critical
@@ -255,15 +258,15 @@ impl NetworkConfClient {
 
     pub async fn create_wg_interface(
         &self,
-        link_name: String,
-        ip_with_mask: String
+        link_name: &str,
+        ip_with_mask: &str
     ) -> std::io::Result<u32> {
         match
             self.handle
                 .as_ref()
                 .unwrap()
                 .link()
-                .add(LinkWireguard::new(&link_name).up().build())
+                .add(LinkWireguard::new(link_name).up().build())
                 .execute().await
         {
             Ok(_) => info!("Successfully created WireGuard interface {}", link_name),
@@ -275,7 +278,7 @@ impl NetworkConfClient {
             }
         }
 
-        let ret = self.get_if_index_by_name(&link_name).await;
+        let ret = self.get_if_index_by_name(link_name).await;
         if let Err(e) = ret {
             error!("Cannot get WireGuard interface index for {}: {}", link_name, e);
             return Err(
@@ -286,7 +289,7 @@ impl NetworkConfClient {
             );
         }
         let if_index = ret.unwrap();
-        let ret = self.configure_interface_ip(if_index, &ip_with_mask).await;
+        let ret = self.configure_interface_ip(if_index, ip_with_mask).await;
         if let Err(e) = ret {
             error!("Cannot configure WireGuard interface {} up: {}", link_name, e);
             return Err(
@@ -309,10 +312,10 @@ impl NetworkConfClient {
 
     pub async fn create_vxlan_interface(
         &self,
-        link_name: String,
-        ip_with_mask: String,
+        link_name: &str,
+        ip_with_mask: &str,
         vid: u32,
-        remote: String,
+        remote: &str,
         dstport: u16
     ) -> std::io::Result<u32> {
         let remote_ip = Ipv4Addr::from_str(&remote).map_err(|e|
@@ -325,7 +328,7 @@ impl NetworkConfClient {
                 .as_ref()
                 .unwrap()
                 .link()
-                .add(LinkVxlan::new(&link_name, vid).remote(remote_ip).port(dstport).up().build())
+                .add(LinkVxlan::new(link_name, vid).remote(remote_ip).port(dstport).up().build())
                 .execute().await
         {
             Ok(_) => info!("Successfully created VXLAN interface {}", link_name),
@@ -337,8 +340,8 @@ impl NetworkConfClient {
             }
         }
 
-        let if_index = self.get_if_index_by_name(&link_name).await?;
-        self.configure_interface_ip(if_index, &ip_with_mask).await?;
+        let if_index = self.get_if_index_by_name(link_name).await?;
+        self.configure_interface_ip(if_index, ip_with_mask).await?;
         if let Err(e) = self.set_interface_up(if_index).await {
             warn!("Failed to set vxlan interface {} up (this is often expected): {}", link_name, e);
             // Continue anyway as this isn't critical
@@ -382,10 +385,10 @@ impl NetworkConfClient {
         Ok((parts[0].to_string(), prefix_len))
     }
 
-    pub async fn delete_interface(&self, link_name: String) -> std::io::Result<()> {
+    pub async fn delete_interface(&self, link_name: &str) -> std::io::Result<()> {
         debug!("Try to delete interface {}", link_name);
 
-        let if_index = match self.get_if_index_by_name(&link_name).await {
+        let if_index = match self.get_if_index_by_name(link_name).await {
             Ok(index) => index,
             Err(_) => {
                 error!("Cannot delete the interface {}, not found", link_name);
@@ -405,15 +408,15 @@ impl NetworkConfClient {
             })
     }
 
-    pub async fn delete_wg_interface(&self, link_name: String) -> std::io::Result<()> {
+    pub async fn delete_wg_interface(&self, link_name: &str) -> std::io::Result<()> {
         self.delete_interface(link_name).await
     }
 
-    pub async fn delete_vxlan_interface(&self, link_name: String) -> std::io::Result<()> {
+    pub async fn delete_vxlan_interface(&self, link_name: &str) -> std::io::Result<()> {
         self.delete_interface(link_name).await
     }
 
-    pub async fn delete_vrf_interface(&self, link_name: String) -> std::io::Result<()> {
+    pub async fn delete_vrf_interface(&self, link_name: &str) -> std::io::Result<()> {
         self.delete_interface(link_name).await
     }
 
@@ -617,8 +620,27 @@ impl NetworkConfClient {
                         rule_matches = false;
                     }
                 }
+                if table > 255 {
+                    let mut has_matching_table_id = false;
+                    for attr in &rule.attributes {
+                        if let RuleAttribute::Table(table_id) = attr {
+                            if *table_id == table {
+                                has_matching_table_id = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !has_matching_table_id {
+                        rule_matches = false;
+                    }
+                } else {
+                    // For table < 256, we can check directly
+                    if rule.header.table != (table as u8) {
+                        rule_matches = false;
+                    }
+                }
 
-                if rule_matches && rule.header.table == (table as u8) {
+                if rule_matches {
                     // Delete this rule using the original rule message
                     return self.handle
                         .as_ref()
@@ -672,13 +694,13 @@ impl NetworkConfClient {
 
     pub async fn create_route_entry(
         &self,
-        dest_ip: String,
+        dest_ip: &str,
         prefix_len: u8,
-        gateway: Option<String>,
-        interface: Option<String>,
+        gateway: Option<&str>,
+        interface: Option<&str>,
         table: Option<u32>
     ) -> std::io::Result<()> {
-        let dest = IpAddr::from_str(&dest_ip).map_err(|e|
+        let dest = IpAddr::from_str(dest_ip).map_err(|e|
             Error::new(ErrorKind::InvalidInput, e.to_string())
         )?;
 
@@ -700,7 +722,7 @@ impl NetworkConfClient {
         }
 
         if let Some(gw) = gateway {
-            let gw_ip = IpAddr::from_str(&gw).map_err(|e|
+            let gw_ip = IpAddr::from_str(gw).map_err(|e|
                 Error::new(ErrorKind::InvalidInput, e.to_string())
             )?;
             builder = builder
@@ -732,18 +754,18 @@ impl NetworkConfClient {
 
     pub async fn delete_route_entry(
         &self,
-        dest_ip: String,
+        dest_ip: &str,
         prefix_len: u8,
-        gateway: Option<String>,
-        interface: Option<String>,
+        gateway: Option<&str>,
+        interface: Option<&str>,
         table: Option<u32>
     ) -> std::io::Result<()> {
-        let dest = IpAddr::from_str(&dest_ip).map_err(|e|
+        let dest = IpAddr::from_str(dest_ip).map_err(|e|
             Error::new(ErrorKind::InvalidInput, e.to_string())
         )?;
 
         // Get interface index if needed
-        let if_index = if let Some(ref iface) = interface {
+        let if_index = if let Some(iface) = interface {
             Some(self.get_if_index_by_name(iface).await?)
         } else {
             None
@@ -788,59 +810,65 @@ impl NetworkConfClient {
             })
     }
 
-    pub async fn flush_route_table(&self, table: Option<u32>) -> std::io::Result<()> {
-        let table_id = table.unwrap_or(libc::RT_TABLE_MAIN as u32);
+    pub async fn flush_route_table(&self, table_id: u32) -> std::io::Result<()> {
+        info!("Flushing route table {}", table_id);
+        let builder = RouteMessageBuilder::<IpAddr>::new().table_id(table_id);
 
-        // Handle IPv4 routes
-        let mut route_msg_v4 = RouteMessage::default();
-        route_msg_v4.header = RouteHeader {
-            address_family: AddressFamily::Inet,
-            table: table_id as u8,
-            ..Default::default()
-        };
-
-        let mut routes = self.handle.as_ref().unwrap().route().get(route_msg_v4).execute();
+        // This is a workaround for the issue that netlink does not support
+        // flushing a specific table directly. Somehow we cannot delete the
+        // whole table with a single delete route message either, so we need to
+        // delete all routes in the table one by one.
+        let mut routes = self.handle.as_ref().unwrap().route().get(builder.build()).execute();
         let mut routes_to_delete = Vec::new();
-
         while
             let Some(route) = routes
                 .try_next().await
                 .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?
         {
-            if route.header.table == (table_id as u8) {
-                routes_to_delete.push(route);
+            // We should not need to check for table id as we are already
+            // filtering by it however, there is a bug in netlink that returns
+            // routes for the whole system if the table id is greater than 255,
+            // so we need to check it manually.
+            if table_id > 255 {
+                let mut found_table = false;
+                for attr in &route.attributes {
+                    if let RouteAttribute::Table(table) = attr {
+                        if *table == table_id {
+                            found_table = true;
+                        }
+                        break;
+                    }
+                }
+                if !found_table {
+                    continue;
+                }
+            } else if route.header.table != (table_id as u8) {
+                continue;
+            }
+            debug!("Found route to delete: {} {:?}", route.header.table, route.attributes);
+            routes_to_delete.push(route);
+        }
+        if !routes_to_delete.is_empty() {
+            info!("Found {} routes to delete in table {}", routes_to_delete.len(), table_id);
+            for route in routes_to_delete {
+                self.handle
+                    .as_ref()
+                    .unwrap()
+                    .route()
+                    .del(route.clone())
+                    .execute().await
+                    .map_err(|e|
+                        Error::new(
+                            ErrorKind::Other,
+                            format!(
+                                "Failed to delete route {:?}: {}",
+                                route.attributes,
+                                e.to_string()
+                            )
+                        )
+                    )?;
             }
         }
-
-        for route in routes_to_delete {
-            let _ = self.handle.as_ref().unwrap().route().del(route).execute().await;
-        }
-
-        // Handle IPv6 routes
-        let mut route_msg_v6 = RouteMessage::default();
-        route_msg_v6.header = RouteHeader {
-            address_family: AddressFamily::Inet6,
-            table: table_id as u8,
-            ..Default::default()
-        };
-
-        let mut routes_v6 = self.handle.as_ref().unwrap().route().get(route_msg_v6).execute();
-        let mut routes_v6_to_delete = Vec::new();
-
-        while
-            let Some(route) = routes_v6
-                .try_next().await
-                .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?
-        {
-            if route.header.table == (table_id as u8) {
-                routes_v6_to_delete.push(route);
-            }
-        }
-
-        for route in routes_v6_to_delete {
-            let _ = self.handle.as_ref().unwrap().route().del(route).execute().await;
-        }
-
         Ok(())
     }
 }
@@ -849,63 +877,80 @@ impl NetworkConfClient {
 pub trait NetApiHandler {
     async fn create_wg_interface(
         &self,
-        namespace_name: &str,
+        interface_name: &str,
         ip: &str,
-        port: Option<i32>,
-        key: &Option<String>
+        port: u16,
+        key: Option<&str>
     ) -> Result<(), std::io::Error>;
 
-    async fn delete_wg_interface(&self, namespace_name: &str) -> Result<(), std::io::Error>;
+    async fn delete_wg_interface(&self, interface_name: &str) -> Result<(), std::io::Error>;
 
     async fn create_vxlan_interface(
         &self,
-        ip_with_mask: String,
+        ip_with_mask: &str,
         vid: u32,
-        remote: String,
+        remote: &str,
         dstport: u16
     ) -> Result<(), std::io::Error>;
 
-    async fn delete_vxlan_interface(&self, if_name: &str) -> Result<(), std::io::Error>;
+    async fn delete_vxlan_interface(&self, interface_name: &str) -> Result<(), std::io::Error>;
 
     async fn create_vrf_interface(
         &self,
-        name: String,
+        interface_name: &str,
         table_id: u32
     ) -> Result<u32, std::io::Error>;
-    async fn delete_vrf_interface(&self, _if_name: &str) -> Result<(), std::io::Error>;
+    async fn delete_vrf_interface(&self, interface_name: &str) -> Result<(), std::io::Error>;
 
-    async fn create_fwmark_entry(
+    async fn create_iptable_fwmark_entry(
         &self,
-        intf_name: String,
-        src_ip: String,
-        fwmark: u32
-    ) -> std::io::Result<()>;
-    async fn delete_fwmark_entry(
-        &self,
-        intf_name: String,
-        src_ip: String,
+        interface_name: &str,
+        src_ip: &str,
         fwmark: u32
     ) -> std::io::Result<()>;
 
-    async fn create_filter_forward_entry(&self, src_ip: String) -> std::io::Result<()>;
-    async fn delete_filter_forward_entry(&self, src_ip: String) -> std::io::Result<()>;
+    async fn delete_iptable_fwmark_entry(
+        &self,
+        interface_name: &str,
+        src_ip: &str,
+        fwmark: u32
+    ) -> std::io::Result<()>;
+
+    async fn create_iptable_filter_rules(
+        &self,
+        input_intf_name: &str,
+        output_intf_name: &str,
+        intf_ip: &str,
+        network: &str
+    ) -> std::io::Result<()>;
+
+    async fn delete_iptable_filter_rules(
+        &self,
+        input_intf_name: &str,
+        output_intf_name: &str,
+        intf_ip: &str,
+        network: &str
+    ) -> std::io::Result<()>;
 
     async fn create_route_entry(
         &self,
-        dest_ip: String,
+        dest_ip: &str,
         prefix_len: u8,
-        gateway: Option<String>,
-        interface: Option<String>,
+        gateway: Option<&str>,
+        interface: Option<&str>,
         table: Option<u32>
     ) -> std::io::Result<()>;
+
     async fn delete_route_entry(
         &self,
-        dest_ip: String,
+        dest_ip: &str,
         prefix_len: u8,
-        gateway: Option<String>,
-        interface: Option<String>,
+        gateway: Option<&str>,
+        interface: Option<&str>,
         table: Option<u32>
     ) -> std::io::Result<()>;
+
+    async fn flush_route_table(&self, table: u32) -> std::io::Result<()>;
 
     async fn add_del_ip_rule(
         &self,
@@ -919,23 +964,22 @@ pub trait NetApiHandler {
 
     async fn create_wireguard_peer(
         &self,
-        name: &String,
-        key: &String,
-        allowed_ips: &Option<Vec<String>>
+        interface_name: &str,
+        key: &str,
+        allowed_ips: Vec<&str>
     ) -> Result<(), std::io::Error>;
 
-    async fn delete_wg_user(
-        &self,
-        interface_name: &String,
-        key: &String
-    ) -> Result<(), std::io::Error>;
+    async fn delete_wg_user(&self, interface_name: &str, key: &str) -> Result<(), std::io::Error>;
 
     async fn get_namespace_detail(&self, name: &str) -> Result<WgNamespaceDetail, std::io::Error>;
-    async fn get_interface_stats(&self, name: &str) -> Result<InterfaceStats, std::io::Error>;
+    async fn get_interface_stats(
+        &self,
+        interface_name: &str
+    ) -> Result<InterfaceStats, std::io::Error>;
 
     async fn get_all_users(&self, namespace: &str) -> Result<Vec<WgPeer>, std::io::Error>;
 
-    async fn get_interface_index(&self, name: &str) -> Result<u32, std::io::Error>;
+    async fn get_interface_index(&self, interface_name: &str) -> Result<u32, std::io::Error>;
 
     async fn move_interface_to_vrf(
         &self,
@@ -962,39 +1006,21 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
 
     async fn create_wg_interface(
         &self,
-        namespace_name: &str,
+        interface_name: &str,
         ip: &str,
-        port: Option<i32>,
-        key: &Option<String>
+        port: u16,
+        key: Option<&str>
     ) -> Result<(), std::io::Error> {
         let client = self.as_ref().lock().await;
-
-        let if_index = client.create_wg_interface(
-            String::from(namespace_name),
-            String::from(ip)
-        ).await?;
-
-        // Use spawn_blocking for synchronous wg-rs operations
-        let namespace_name = namespace_name.to_string();
-        let key = key.clone();
-        tokio::task
-            ::spawn_blocking(move || {
-                set_wireguard_interface(
-                    &namespace_name,
-                    Some(if_index),
-                    key.as_ref().map(|k| k.as_str()),
-                    port.map(|p| p as u16),
-                    None
-                )
-            }).await
-            .unwrap()
+        let if_index = client.create_wg_interface(interface_name, ip).await?;
+        set_wireguard_interface(&interface_name, Some(if_index), key, Some(port), None)
     }
 
     async fn create_vxlan_interface(
         &self,
-        ip_with_mask: String,
+        ip_with_mask: &str,
         vid: u32,
-        remote: String,
+        remote: &str,
         dstport: u16
     ) -> Result<(), std::io::Error> {
         debug!(
@@ -1009,111 +1035,207 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
 
         client
             .create_vxlan_interface(
-                format!("vxlan_{}", vid).to_string(),
-                ip_with_mask.clone(),
+                format!("vxlan_{}", vid).as_str(),
+                ip_with_mask,
                 vid,
-                remote.clone(),
+                remote,
                 dstport
             ).await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 warn!(
                     "Cannot create vxlan interface: ipwithmask:{}, vid {}, remote {}, dstport {}: {}",
                     ip_with_mask,
                     vid,
                     remote,
                     dstport,
-                    e
+                    e.to_string()
                 );
-                e
             })
             .map(|_| ())
     }
 
-    async fn create_fwmark_entry(
+    async fn create_iptable_fwmark_entry(
         &self,
-        intf_name: String,
-        src_ip: String,
+        interface_name: &str,
+        src_ip: &str,
         fwmark: u32
     ) -> std::io::Result<()> {
         debug!(
             "Creating the iptables entry, interface name {}, source ip {}, fwmark setting {}",
-            intf_name,
+            interface_name,
             src_ip,
             fwmark
         );
-        let intf_name_clone = intf_name.clone();
-        let src_ip_clone = src_ip.clone();
-
         let client = self.as_ref().lock().await;
-        client.create_fwmark_entry(intf_name_clone, src_ip_clone, fwmark)
+        client.create_iptable_fwmark_entry(interface_name, src_ip, fwmark)
     }
 
-    async fn create_filter_forward_entry(&self, src_ip: String) -> std::io::Result<()> {
-        debug!("Creating the iptables filter forward entry, source ip {}", src_ip);
-        let src_ip_clone = src_ip.clone();
+    async fn create_iptable_filter_rules(
+        &self,
+        input_intf_name: &str,
+        output_intf_name: &str,
+        intf_ip: &str,
+        intf_network: &str
+    ) -> std::io::Result<()> {
+        debug!(
+            "Creating the iptables filter rules for {} -> {}, ip {}, network {}",
+            input_intf_name,
+            output_intf_name,
+            intf_ip,
+            intf_network
+        );
         let client = self.as_ref().lock().await;
-        client.create_iptable_filter_forward_entry(src_ip_clone, "source".to_string())?;
-        let src_ip_clone = src_ip.clone();
-        client.create_iptable_filter_forward_entry(src_ip_clone, "destination".to_string())
+        client.create_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-i {} -s {} -d {}/32 -j ACCEPT",
+                input_intf_name,
+                intf_network,
+                intf_ip
+            ).as_str(),
+            true
+        )?;
+        client.create_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-o {} -s {}/32 -d {} -j ACCEPT",
+                output_intf_name,
+                intf_ip,
+                intf_network
+            ).as_str(),
+            true
+        )?;
+        client.create_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-i {} -s {} -d {} -j REJECT",
+                input_intf_name,
+                intf_network,
+                intf_network
+            ).as_str(),
+            true
+        )?;
+        client.create_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-i {} -s {} ! -d {} -j ACCEPT",
+                input_intf_name,
+                intf_network,
+                intf_network
+            ).as_str(),
+            true
+        )?;
+        client.create_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-o {} ! -s {} -d {} -j ACCEPT",
+                output_intf_name,
+                intf_network,
+                intf_network
+            ).as_str(),
+            true
+        )
     }
 
-    async fn delete_filter_forward_entry(&self, src_ip: String) -> std::io::Result<()> {
-        debug!("Delete an existing iptables forward entry, source ip {}", src_ip);
+    async fn delete_iptable_filter_rules(
+        &self,
+        input_intf_name: &str,
+        output_intf_name: &str,
+        intf_ip: &str,
+        intf_network: &str
+    ) -> std::io::Result<()> {
+        debug!(
+            "Deleting the iptables filter rules for {} -> {}, ip {}, network {}",
+            input_intf_name,
+            output_intf_name,
+            intf_ip,
+            intf_network
+        );
         let client = self.as_ref().lock().await;
-
-        // Delete source rule
-        let src_ip_clone = src_ip.clone();
-        client.delete_iptable_filter_forward_entry(src_ip_clone, "source".to_string())?;
-
-        // Delete destination rule
-        let src_ip_clone = src_ip.clone();
-        client.delete_iptable_filter_forward_entry(src_ip_clone, "destination".to_string())
+        client.delete_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-i {} -s {} -d {}/32 -j ACCEPT",
+                input_intf_name,
+                intf_network,
+                intf_ip
+            ).as_str()
+        )?;
+        client.delete_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-o {} -s {}/32 -d {} -j ACCEPT",
+                output_intf_name,
+                intf_ip,
+                intf_network
+            ).as_str()
+        )?;
+        client.delete_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-i {} -s {} -d {} -j REJECT",
+                input_intf_name,
+                intf_network,
+                intf_network
+            ).as_str()
+        )?;
+        client.delete_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-i {} -s {} ! -d {} -j ACCEPT",
+                input_intf_name,
+                intf_network,
+                intf_network
+            ).as_str()
+        )?;
+        client.delete_iptable_rule(
+            IPTABLE_FILTER_TABLE,
+            IPTABLE_FORWARD_CHAIN,
+            format!(
+                "-o {} ! -s {} -d {} -j ACCEPT",
+                output_intf_name,
+                intf_network,
+                intf_network
+            ).as_str()
+        )
     }
 
     async fn create_wireguard_peer(
         &self,
-        name: &String,
-        key: &String,
-        allowed_ips: &Option<Vec<String>>
+        interface_name: &str,
+        key: &str,
+        allowed_ips: Vec<&str>
     ) -> Result<(), std::io::Error> {
-        debug!("Creating wireguard peer for {}/{} with allowed_ips {:?}", name, key, allowed_ips);
+        debug!(
+            "Creating wireguard peer for {}/{} with allowed_ips {:?}",
+            interface_name,
+            key,
+            allowed_ips
+        );
         let client = self.as_ref().lock().await;
-
-        let if_index = client.get_if_index_by_name(name).await?;
-
-        // Use spawn_blocking for wg-rs operations
-        let name_clone = name.clone();
-        let key_clone = key.clone();
-        match allowed_ips.clone() {
-            None => {
-                warn!("Allow ip cannot be empty.");
-                Err(Error::new(ErrorKind::InvalidData, "allow ip cannot be empty"))
-            }
-            Some(ips) => {
-                let ips_slice: Vec<&str> = ips
-                    .iter()
-                    .map(|a| a.as_str())
-                    .collect();
-                debug!("allowed_ips {:?}", ips_slice);
-                add_wireguard_peer(
-                    &name_clone,
-                    None,
-                    Some(if_index),
-                    Some(WG_PERSISTENCE_KEEPALIVE_INTERVAL),
-                    &ips_slice[..],
-                    &key_clone
-                )
-            }
-        }
+        let if_index = client.get_if_index_by_name(interface_name).await?;
+        add_wireguard_peer(
+            interface_name,
+            None,
+            Some(if_index),
+            Some(WG_PERSISTENCE_KEEPALIVE_INTERVAL),
+            allowed_ips.as_slice(),
+            key
+        )
     }
 
-    async fn create_vrf_interface(
-        &self,
-        name: String,
-        table_id: u32
-    ) -> Result<u32, std::io::Error> {
+    async fn create_vrf_interface(&self, name: &str, table_id: u32) -> Result<u32, std::io::Error> {
         debug!("Creating a new vrf interface, name {}, table id {}", name, table_id);
-        let ret = self.as_ref().lock().await.create_vrf_interface(name.clone(), table_id).await;
+        let ret = self.as_ref().lock().await.create_vrf_interface(name, table_id).await;
         match ret {
             Err(e) => {
                 warn!("Cannot create vrf interface: name {}, table id {}: {}", name, table_id, e);
@@ -1126,10 +1248,10 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         }
     }
 
-    async fn delete_fwmark_entry(
+    async fn delete_iptable_fwmark_entry(
         &self,
-        intf_name: String,
-        src_ip: String,
+        intf_name: &str,
+        src_ip: &str,
         fwmark: u32
     ) -> std::io::Result<()> {
         debug!(
@@ -1140,7 +1262,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         );
         self.as_ref()
             .lock().await
-            .delete_fwmark_entry(intf_name.clone(), src_ip.clone(), fwmark)
+            .delete_iptable_fwmark_entry(intf_name, src_ip, fwmark)
             .map_err(|e| {
                 warn!(
                     "Cannot delete the fwmark entry, interface name {}, source ip {}, fwmark setting {}",
@@ -1180,10 +1302,10 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
 
     async fn create_route_entry(
         &self,
-        dest_ip: String,
+        dest_ip: &str,
         prefix_len: u8,
-        gateway: Option<String>,
-        interface: Option<String>,
+        gateway: Option<&str>,
+        interface: Option<&str>,
         table: Option<u32>
     ) -> std::io::Result<()> {
         debug!(
@@ -1196,13 +1318,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         );
         self.as_ref()
             .lock().await
-            .create_route_entry(
-                dest_ip.clone(),
-                prefix_len,
-                gateway.clone(),
-                interface.clone(),
-                table
-            ).await
+            .create_route_entry(dest_ip, prefix_len, gateway, interface, table).await
             .map_err(|e| {
                 warn!(
                     "Cannot create route entry: {}/{}, gateway {:?}, interface{:?}, table{:?}, reason : {}",
@@ -1219,10 +1335,10 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
 
     async fn delete_route_entry(
         &self,
-        dest_ip: String,
+        dest_ip: &str,
         prefix_len: u8,
-        gateway: Option<String>,
-        interface: Option<String>,
+        gateway: Option<&str>,
+        interface: Option<&str>,
         table: Option<u32>
     ) -> std::io::Result<()> {
         debug!(
@@ -1235,13 +1351,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         );
         self.as_ref()
             .lock().await
-            .delete_route_entry(
-                dest_ip.clone(),
-                prefix_len,
-                gateway.clone(),
-                interface.clone(),
-                table
-            ).await
+            .delete_route_entry(dest_ip, prefix_len, gateway, interface, table).await
             .map_err(|e| {
                 warn!(
                     "Cannot delete an route entry {}/{}, gateway {:?}, interface {:?}, table{:?}: {}",
@@ -1256,52 +1366,43 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
             })
     }
 
-    async fn delete_wg_interface(&self, namespace_name: &str) -> Result<(), std::io::Error> {
-        debug!("Deleting an wireguard interface, interface name {}", namespace_name);
+    async fn flush_route_table(&self, table: u32) -> std::io::Result<()> {
+        self.as_ref().lock().await.flush_route_table(table).await
+    }
+
+    async fn delete_wg_interface(&self, interface_name: &str) -> Result<(), std::io::Error> {
+        debug!("Deleting an wireguard interface {}", interface_name);
         self.as_ref()
             .lock().await
-            .delete_wg_interface(String::from(namespace_name)).await
-            .map_err(|e| {
-                warn!(
-                    "Cannot delete an wireguard interface, interface name {}, reason {}",
-                    namespace_name,
-                    e
-                );
-                e
+            .delete_wg_interface(interface_name).await
+            .inspect_err(|e| {
+                warn!("Cannot delete an wireguard interface {}: {}", interface_name, e.to_string());
             })
     }
 
     async fn delete_vxlan_interface(&self, if_name: &str) -> Result<(), std::io::Error> {
-        debug!("Deleting an vxlan interface, interface name {}", if_name);
+        debug!("Deleting an vxlan interface {}", if_name);
         self.as_ref()
             .lock().await
-            .delete_vxlan_interface(String::from(if_name)).await
-            .map_err(|e| {
-                warn!("Cannot delete an vxlan interface, interface name {}, reason {}", if_name, e);
-                e
+            .delete_vxlan_interface(if_name).await
+            .inspect_err(|e| {
+                warn!("Cannot delete an vxlan interface {}: {}", if_name, e.to_string());
             })
     }
 
     async fn delete_vrf_interface(&self, if_name: &str) -> Result<(), std::io::Error> {
-        debug!("Deleting an vrf interface, interface name {}", if_name);
+        debug!("Deleting an vrf interface {}", if_name);
         self.as_ref()
             .lock().await
-            .delete_vrf_interface(String::from(if_name)).await
-            .map_err(|e| {
-                warn!("Cannot delete an vrf interface, interface name {}, reason {}", if_name, e);
-                e
+            .delete_vrf_interface(if_name).await
+            .inspect_err(|e| {
+                warn!("Cannot delete an vrf interface {}: {}", if_name, e.to_string());
             })
     }
 
-    async fn delete_wg_user(
-        &self,
-        interface_name: &String,
-        key: &String
-    ) -> Result<(), std::io::Error> {
+    async fn delete_wg_user(&self, interface_name: &str, key: &str) -> Result<(), std::io::Error> {
         let if_index = self.as_ref().lock().await.get_if_index_by_name(interface_name).await?;
-        let interface_name = interface_name.clone();
-        let key = key.clone();
-        remove_wirefguard_peer(&interface_name, Some(if_index), &key)
+        remove_wirefguard_peer(interface_name, Some(if_index), key)
     }
 
     async fn get_namespace_detail(&self, name: &str) -> Result<WgNamespaceDetail, std::io::Error> {
@@ -1538,8 +1639,8 @@ mod tests {
     // Test constants and static values
     #[test]
     fn test_constants() {
-        assert_eq!(IPTABLE_TABLE, "mangle");
-        assert_eq!(IPTABLE_CHAIN, "PREROUTING");
+        assert_eq!(IPTABLE_MANGLE_TABLE, "mangle");
+        assert_eq!(IPTABLE_PREROUTING_CHAIN, "PREROUTING");
         assert_eq!(IPTABLE_FILTER_TABLE, "filter");
         assert_eq!(IPTABLE_FORWARD_CHAIN, "FORWARD");
         assert_eq!(WG_PERSISTENCE_KEEPALIVE_INTERVAL, 15);

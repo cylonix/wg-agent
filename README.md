@@ -1,3 +1,5 @@
+[Wg-Agent](./project.jpg)
+
 # How to build wg-agent
 
 ## Generate api

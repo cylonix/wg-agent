@@ -1,28 +1,32 @@
-[Wg-Agent](./project.jpg)
+# Wg-Agent
 
-# How to build wg-agent
+A WireGuard termination gateway written in Rust. Supports multiple VRFs and VXLAN tunnel to the next stage FW or router.
 
-## Generate api
+![Wg-Agent](./project.jpg)
+
+## How to build wg-agent
+
+### Generate api
 
 ```bash
 make generate
 ```
 
-## Compile
+### Compile
 
 ```bash
 make build
 ```
 
-## Optional steps
+### Optional steps
 
-### How generate rust code from c code?
+#### How generate rust code from c code?
 
 ```bash
 bindgen wrapper.h --whitelist-function 'ipc_.*|curve.*' --whitelist-type 'wgdevice|wgdevice_flag_wg_peer_flag_' --rustified-enum ".*" -- -I ~/wg-manager/wg-sys/wireguard-tools/src/uapi/linux  > src/lib.rs
 ```
 
-### How to run test with output
+#### How to run test with output
 
 ```bash
  cargo test test_base58_curve25519 -- --show-output

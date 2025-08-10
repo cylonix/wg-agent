@@ -56,13 +56,13 @@ async fn test_vrf_lifecycle() {
     let vrf_name = create_test_interface_name();
 
     // Create VRF - Note: Using direct method call instead of trait
-    let result = client.create_vrf_interface(vrf_name.clone(), 100).await;
+    let result = client.create_vrf_interface(vrf_name.as_str(), 100).await;
     if result.is_ok() {
         let vrf_index = result.unwrap();
         assert!(vrf_index > 0);
 
         // Cleanup
-        let delete_result = client.delete_vrf_interface(vrf_name).await;
+        let delete_result = client.delete_vrf_interface(vrf_name.as_str()).await;
         assert!(delete_result.is_ok());
     } else {
         println!("VRF creation failed (may require kernel VRF support): {:?}", result.err());

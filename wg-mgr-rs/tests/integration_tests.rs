@@ -8,8 +8,8 @@ async fn test_full_interface_lifecycle() {
 
     // Test creating a test interface (requires root)
     let result = client.create_wg_interface(
-        "test-wg0".to_string(),
-        "10.0.0.1/24".to_string()
+        "test-wg0",
+        "10.0.0.1/24"
     ).await;
 
     if result.is_ok() {
@@ -23,7 +23,7 @@ async fn test_full_interface_lifecycle() {
         assert!(stats_result.is_ok());
 
         // Cleanup
-        let delete_result = client.delete_wg_interface("test-wg0".to_string()).await;
+        let delete_result = client.delete_wg_interface("test-wg0").await;
         assert!(delete_result.is_ok());
     }
 }
@@ -45,10 +45,10 @@ async fn test_vxlan_interface_lifecycle() {
 
     // Test creating a VXLAN interface
     let result = client.create_vxlan_interface(
-        "test-vxlan0".to_string(),
-        "10.0.1.1/24".to_string(),
+        "test-vxlan0",
+        "10.0.1.1/24",
         100, // VID
-        "239.1.1.1".to_string(), // Multicast group
+        "239.1.1.1", // Multicast group
         4789 // Default VXLAN port
     ).await;
 
@@ -60,7 +60,7 @@ async fn test_vxlan_interface_lifecycle() {
         assert!(ip_result.is_ok());
 
         // Cleanup
-        let delete_result = client.delete_vxlan_interface("test-vxlan0".to_string()).await;
+        let delete_result = client.delete_vxlan_interface("test-vxlan0").await;
         assert!(delete_result.is_ok());
     }
 }

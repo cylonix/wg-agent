@@ -1494,8 +1494,8 @@ mod tests {
 
         // Test interface creation
         let result = client.create_wg_interface(
-            "test_wg0".to_string(),
-            "10.0.0.1/24".to_string()
+            "test_wg0",
+            "10.0.0.1/24"
         ).await;
 
         // We expect this to fail in test environment without root privileges

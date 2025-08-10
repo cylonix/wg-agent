@@ -881,9 +881,9 @@ pub trait NetApiHandler {
         ip: &str,
         port: u16,
         key: Option<&str>
-    ) -> Result<(), std::io::Error>;
+    ) -> Result<(), Error>;
 
-    async fn delete_wg_interface(&self, interface_name: &str) -> Result<(), std::io::Error>;
+    async fn delete_wg_interface(&self, interface_name: &str) -> Result<(), Error>;
 
     async fn create_vxlan_interface(
         &self,
@@ -891,16 +891,12 @@ pub trait NetApiHandler {
         vid: u32,
         remote: &str,
         dstport: u16
-    ) -> Result<(), std::io::Error>;
+    ) -> Result<(), Error>;
 
-    async fn delete_vxlan_interface(&self, interface_name: &str) -> Result<(), std::io::Error>;
+    async fn delete_vxlan_interface(&self, interface_name: &str) -> Result<(), Error>;
 
-    async fn create_vrf_interface(
-        &self,
-        interface_name: &str,
-        table_id: u32
-    ) -> Result<u32, std::io::Error>;
-    async fn delete_vrf_interface(&self, interface_name: &str) -> Result<(), std::io::Error>;
+    async fn create_vrf_interface(&self, interface_name: &str, table_id: u32) -> Result<u32, Error>;
+    async fn delete_vrf_interface(&self, interface_name: &str) -> Result<(), Error>;
 
     async fn create_iptable_fwmark_entry(
         &self,
@@ -967,39 +963,28 @@ pub trait NetApiHandler {
         interface_name: &str,
         key: &str,
         allowed_ips: Vec<&str>
-    ) -> Result<(), std::io::Error>;
+    ) -> Result<(), Error>;
 
-    async fn delete_wg_user(&self, interface_name: &str, key: &str) -> Result<(), std::io::Error>;
+    async fn delete_wg_user(&self, interface_name: &str, key: &str) -> Result<(), Error>;
 
-    async fn get_namespace_detail(&self, name: &str) -> Result<WgNamespaceDetail, std::io::Error>;
-    async fn get_interface_stats(
-        &self,
-        interface_name: &str
-    ) -> Result<InterfaceStats, std::io::Error>;
+    async fn get_namespace_detail(&self, name: &str) -> Result<WgNamespaceDetail, Error>;
+    async fn get_interface_stats(&self, interface_name: &str) -> Result<InterfaceStats, Error>;
 
-    async fn get_all_users(&self, namespace: &str) -> Result<Vec<WgPeer>, std::io::Error>;
+    async fn get_all_users(&self, namespace: &str) -> Result<Vec<WgPeer>, Error>;
 
-    async fn get_interface_index(&self, interface_name: &str) -> Result<u32, std::io::Error>;
+    async fn get_interface_index(&self, interface_name: &str) -> Result<u32, Error>;
 
-    async fn move_interface_to_vrf(
-        &self,
-        if_index: u32,
-        vrf_index: u32
-    ) -> Result<(), std::io::Error>;
+    async fn move_interface_to_vrf(&self, if_index: u32, vrf_index: u32) -> Result<(), Error>;
 }
 
 #[async_trait]
 impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send + Sync {
-    async fn move_interface_to_vrf(
-        &self,
-        if_index: u32,
-        vrf_index: u32
-    ) -> Result<(), std::io::Error> {
+    async fn move_interface_to_vrf(&self, if_index: u32, vrf_index: u32) -> Result<(), Error> {
         let client = self.as_ref().lock().await;
         client.move_interface_to_vrf(if_index, vrf_index).await
     }
 
-    async fn get_interface_index(&self, name: &str) -> Result<u32, std::io::Error> {
+    async fn get_interface_index(&self, name: &str) -> Result<u32, Error> {
         let client = self.as_ref().lock().await;
         client.get_if_index_by_name(name).await
     }
@@ -1010,7 +995,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         ip: &str,
         port: u16,
         key: Option<&str>
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), Error> {
         let client = self.as_ref().lock().await;
         let if_index = client.create_wg_interface(interface_name, ip).await?;
         set_wireguard_interface(&interface_name, Some(if_index), key, Some(port), None)
@@ -1022,7 +1007,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         vid: u32,
         remote: &str,
         dstport: u16
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), Error> {
         debug!(
             "Creating a new vxlan interface, name vxlan_{}, ip {}, vid {}, peer {}, dst port {}",
             vid,
@@ -1214,7 +1199,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         interface_name: &str,
         key: &str,
         allowed_ips: Vec<&str>
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<(), Error> {
         debug!(
             "Creating wireguard peer for {}/{} with allowed_ips {:?}",
             interface_name,
@@ -1233,7 +1218,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         )
     }
 
-    async fn create_vrf_interface(&self, name: &str, table_id: u32) -> Result<u32, std::io::Error> {
+    async fn create_vrf_interface(&self, name: &str, table_id: u32) -> Result<u32, Error> {
         debug!("Creating a new vrf interface, name {}, table id {}", name, table_id);
         let ret = self.as_ref().lock().await.create_vrf_interface(name, table_id).await;
         match ret {
@@ -1370,7 +1355,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
         self.as_ref().lock().await.flush_route_table(table).await
     }
 
-    async fn delete_wg_interface(&self, interface_name: &str) -> Result<(), std::io::Error> {
+    async fn delete_wg_interface(&self, interface_name: &str) -> Result<(), Error> {
         debug!("Deleting an wireguard interface {}", interface_name);
         self.as_ref()
             .lock().await
@@ -1380,7 +1365,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
             })
     }
 
-    async fn delete_vxlan_interface(&self, if_name: &str) -> Result<(), std::io::Error> {
+    async fn delete_vxlan_interface(&self, if_name: &str) -> Result<(), Error> {
         debug!("Deleting an vxlan interface {}", if_name);
         self.as_ref()
             .lock().await
@@ -1390,7 +1375,7 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
             })
     }
 
-    async fn delete_vrf_interface(&self, if_name: &str) -> Result<(), std::io::Error> {
+    async fn delete_vrf_interface(&self, if_name: &str) -> Result<(), Error> {
         debug!("Deleting an vrf interface {}", if_name);
         self.as_ref()
             .lock().await
@@ -1400,28 +1385,45 @@ impl<T> NetApiHandler for T where T: AsRef<Arc<Mutex<NetworkConfClient>>> + Send
             })
     }
 
-    async fn delete_wg_user(&self, interface_name: &str, key: &str) -> Result<(), std::io::Error> {
+    async fn delete_wg_user(&self, interface_name: &str, key: &str) -> Result<(), Error> {
         let if_index = self.as_ref().lock().await.get_if_index_by_name(interface_name).await?;
         remove_wirefguard_peer(interface_name, Some(if_index), key)
     }
 
-    async fn get_namespace_detail(&self, name: &str) -> Result<WgNamespaceDetail, std::io::Error> {
-        let name_clone = name.to_string();
-        let wg_info = collect_wireguard_info(&name_clone).unwrap();
+    async fn get_namespace_detail(&self, name: &str) -> Result<WgNamespaceDetail, Error> {
+        let wg_interface_name = format!("wg_{}", name);
+        let wg_info = collect_wireguard_info(wg_interface_name.as_str()).map_err(|e| {
+            warn!("Failed to collect wireguard info for {}: {}", wg_interface_name, e);
+            Error::new(
+                ErrorKind::NotFound,
+                format!("Wireguard interface {} not found: {}", wg_interface_name, e)
+            )
+        })?;
         let pubkey = wg_info.get_base64_from_pk().unwrap_or_else(|_| "None".to_string());
         let listen_port = wg_info.listen_port.unwrap_or(0);
-        let ip = self.as_ref().lock().await.get_ip_by_name(name).await?.join(",");
+        let ip = self
+            .as_ref()
+            .lock().await
+            .get_ip_by_name(wg_interface_name.as_str()).await
+            .map_err(|e| {
+                warn!("Failed to get IP for interface {}: {}", wg_interface_name, e);
+                Error::new(
+                    ErrorKind::NotFound,
+                    format!("IP for interface {} not found: {}", wg_interface_name, e)
+                )
+            })?
+            .join(",");
         debug!("{} get_namespace_detail pk: {} ip: {} port: {}", name, pubkey, ip, listen_port);
         Ok(WgNamespaceDetail::new(name.to_string(), pubkey, listen_port as i32, 0, ip))
     }
 
-    async fn get_interface_stats(&self, name: &str) -> Result<InterfaceStats, std::io::Error> {
+    async fn get_interface_stats(&self, name: &str) -> Result<InterfaceStats, Error> {
         self.as_ref().lock().await.get_if_stats_by_name(name).await
     }
 
-    async fn get_all_users(&self, namespace: &str) -> Result<Vec<WgPeer>, std::io::Error> {
-        let namespace_clone = namespace.to_string();
-        let wgd = collect_wireguard_info(&namespace_clone).unwrap();
+    async fn get_all_users(&self, namespace: &str) -> Result<Vec<WgPeer>, Error> {
+        let wg_interface_name = format!("wg_{}", namespace);
+        let wgd = collect_wireguard_info(wg_interface_name.as_str())?;
         Ok(wgd.get_users().unwrap_or_default().iter().cloned().collect())
     }
 }

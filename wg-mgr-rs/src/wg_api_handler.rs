@@ -360,7 +360,7 @@ impl<T> ApiHandler for T where T: AsRef<Client> + AsRef<Arc<Mutex<NetworkConfCli
             let namespace_json = serde_json::to_string(&ns).unwrap();
             let etcd_handler: &Client = self.as_ref();
             etcd_handler
-                .save_into_namespace(namespace_name, namespace_json.as_str()).await
+                .save_namespace(namespace_name, namespace_json.as_str()).await
                 .inspect_err(|e| {
                     error!("Cannot save namespace {} into store: {}", ns.name, e.to_string());
                 })?;
@@ -786,7 +786,8 @@ impl<T> ApiHandler for T where T: AsRef<Client> + AsRef<Arc<Mutex<NetworkConfCli
     }
     async fn get_namespace_users(&self, namespace: &str) -> Result<Vec<models::WgUser>> {
         let mut wg_users = Vec::<models::WgUser>::new();
-        let wgd = collect_wireguard_info(namespace)?;
+        let wg_interface_name = format!("wg_{}", namespace);
+        let wgd = collect_wireguard_info(wg_interface_name.as_str())?;
         let etcd_handler: &Client = self.as_ref();
         match wgd.get_users() {
             Some(peers) => {
@@ -803,7 +804,8 @@ impl<T> ApiHandler for T where T: AsRef<Client> + AsRef<Arc<Mutex<NetworkConfCli
         Ok(wg_users)
     }
     async fn remove_peers_not_in_db(&self, namespace: &str) -> Result<()> {
-        let wgd = collect_wireguard_info(namespace)?;
+        let wg_interface_name = format!("wg_{}", namespace);
+        let wgd = collect_wireguard_info(wg_interface_name.as_str())?;
         let etcd_handler: &Client = self.as_ref();
         match wgd.get_users() {
             Some(peers) => {

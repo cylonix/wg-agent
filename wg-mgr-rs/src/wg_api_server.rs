@@ -4,20 +4,20 @@
 // Main library entry point for wg_api implementation.
 use log::*;
 use std::marker::PhantomData;
-use std::net::{SocketAddr};
+use std::net::{ SocketAddr };
 use std::sync::Arc;
 use std::convert::Infallible;
 use tokio::sync::Mutex;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server as HyperServer, StatusCode};
+use hyper::service::{ make_service_fn, service_fn };
+use hyper::{ Body, Method, Request, Response, Server as HyperServer, StatusCode };
 use serde_json;
 
 use crate::wg_api_handler::ApiHandler;
 use crate::wg_conf_store_srv::EtcdApiHander;
-use crate::wg_network_conf_srv::{NetApiHandler, NetworkConfClient};
+use crate::wg_network_conf_srv::{ NetApiHandler, NetworkConfClient };
 use etcd_rs::Client;
-use systemstat::{Platform, System};
-use wg_api::models::{self};
+use systemstat::{ Platform, System };
+use wg_api::models::{ self };
 
 // Re-export types that might be needed
 pub use hyper::Error as HyperError;
@@ -26,7 +26,7 @@ pub use hyper::Error as HyperError;
 pub async fn create(
     addr: &str,
     etcd_client: Client,
-    network_config_client: Arc<Mutex<NetworkConfClient>>,
+    network_config_client: Arc<Mutex<NetworkConfClient>>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     debug!("Creating a main tokio server...");
     let addr: SocketAddr = addr.parse().expect("Failed to parse bind address");
@@ -36,20 +36,20 @@ pub async fn create(
     let make_svc = make_service_fn(move |_conn| {
         let server = Arc::clone(&server);
         async move {
-            Ok::<_, Infallible>(service_fn(move |req| {
-                let server = Arc::clone(&server);
-                async move {
-                    handle_request(req, server).await
-                }
-            }))
+            Ok::<_, Infallible>(
+                service_fn(move |req| {
+                    let server = Arc::clone(&server);
+                    async move { handle_request(req, server).await }
+                })
+            )
         }
     });
 
     // Create and run the server
     let hyper_server = HyperServer::bind(&addr).serve(make_svc);
-    
+
     debug!("Server listening on {}", addr);
-    
+
     if let Err(e) = hyper_server.await {
         error!("Server error: {}", e);
         return Err(e.into());
@@ -58,9 +58,20 @@ pub async fn create(
     Ok(())
 }
 
+async fn parse_namespaces(
+    req: Request<Body>
+) -> Result<Option<Vec<models::WgNamespace>>, serde_json::Error> {
+    let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
+    if body_bytes.is_empty() {
+        Ok(None)
+    } else {
+        serde_json::from_slice::<Vec<models::WgNamespace>>(&body_bytes).map(|ns| { Ok(Some(ns)) })?
+    }
+}
+
 async fn handle_request(
     req: Request<Body>,
-    server: Arc<Server<EmptyContext>>,
+    server: Arc<Server<EmptyContext>>
 ) -> Result<Response<Body>, HyperError> {
     let method = req.method();
     let path = req.uri().path();
@@ -167,7 +178,17 @@ async fn handle_request(
             }
         }
         (&Method::GET, "/v1/namespace") => {
-            match server.list_namespaces(None, &context).await {
+            let namespaces = parse_namespaces(req).await;
+            if let Err(e) = namespaces {
+                error!("Invalid JSON: {}", e);
+                return Ok(
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from("Invalid JSON"))
+                        .unwrap()
+                );
+            }
+            match server.list_namespaces(namespaces.unwrap().as_ref()).await {
                 Ok(namespaces) => {
                     let json = serde_json::to_string(&namespaces).unwrap_or_default();
                     Response::builder()
@@ -180,7 +201,37 @@ async fn handle_request(
                     error!("List namespaces failed: {:?}", e);
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::from("Failed to list namespaces"))
+                        .header("content-type", "plain/text")
+                        .body(Body::from(format!("Failed to list namespaces: {}", e)))
+                        .unwrap()
+                }
+            }
+        }
+        (&Method::GET, "/v1/users") => {
+            let namespaces = parse_namespaces(req).await;
+            if let Err(e) = namespaces {
+                error!("Invalid JSON: {}", e);
+                return Ok(
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from("Invalid JSON"))
+                        .unwrap()
+                );
+            }
+            match server.list_users(namespaces.unwrap().as_ref()).await {
+                Ok(users) => {
+                    let json = serde_json::to_string(&users).unwrap_or_default();
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(json))
+                        .unwrap()
+                }
+                Err(e) => {
+                    error!("List users failed: {:?}", e);
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from(format!("Failed to list users: {}", e)))
                         .unwrap()
                 }
             }
@@ -214,7 +265,7 @@ async fn handle_request(
                 }
             }
         }
-        (&Method::DELETE, "/v1/users") => {
+        (&Method::DELETE, "/v1/user") => {
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
             match serde_json::from_slice::<Vec<models::WgUser>>(&body_bytes) {
                 Ok(users) => {
@@ -244,10 +295,7 @@ async fn handle_request(
             }
         }
         _ => {
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Not Found"))
-                .unwrap()
+            Response::builder().status(StatusCode::NOT_FOUND).body(Body::from("Not Found")).unwrap()
         }
     };
 
@@ -312,7 +360,9 @@ impl<C> AsRef<Client> for Server<C> {
 
 impl<C> Server<C> {
     pub fn new(etcd_client: Client, network_config_client: Arc<Mutex<NetworkConfClient>>) -> Self {
-        debug!("Creating a openapi server object, with etcd client and linux networking utils enabled...");
+        debug!(
+            "Creating a openapi server object, with etcd client and linux networking utils enabled..."
+        );
         Server {
             marker: PhantomData,
             etcd_client,
@@ -324,10 +374,7 @@ impl<C> Server<C> {
 pub trait InternalApi {}
 
 // Implementation of the main API methods
-impl<C> Server<C>
-where
-    C: Clone + Send + Sync,
-{
+impl<C> Server<C> where C: Clone + Send + Sync {
     pub async fn get_system_info(&self, _context: &C) -> Result<models::SysInfo, ApiError> {
         let mut sysinfo = models::SysInfo {
             file_system: None,
@@ -338,7 +385,7 @@ where
         };
 
         let sys = System::new();
-        
+
         // File system info
         if let Ok(mounts) = sys.mounts() {
             let ret = mounts
@@ -358,8 +405,7 @@ where
             let ret = networks
                 .iter()
                 .map(|(name, network)| {
-                    let addr = network
-                        .addrs
+                    let addr = network.addrs
                         .iter()
                         .map(|addr| format!("{:?}", addr))
                         .collect::<Vec<_>>();
@@ -378,17 +424,19 @@ where
             let ret = networks
                 .iter()
                 .filter_map(|(name, _)| {
-                    sys.network_stats(name.as_str()).ok().map(|stats| {
-                        models::NetworkStats {
-                            name: Some(name.clone()),
-                            rx_bytes: Some(stats.rx_bytes.as_u64() as i64),
-                            tx_bytes: Some(stats.tx_bytes.as_u64() as i64),
-                            rx_packets: Some(stats.rx_packets as i64),
-                            tx_packets: Some(stats.tx_packets as i64),
-                            rx_errors: Some(stats.rx_errors as i64),
-                            tx_errors: Some(stats.tx_errors as i64),
-                        }
-                    })
+                    sys.network_stats(name.as_str())
+                        .ok()
+                        .map(|stats| {
+                            models::NetworkStats {
+                                name: Some(name.clone()),
+                                rx_bytes: Some(stats.rx_bytes.as_u64() as i64),
+                                tx_bytes: Some(stats.tx_bytes.as_u64() as i64),
+                                rx_packets: Some(stats.rx_packets as i64),
+                                tx_packets: Some(stats.tx_packets as i64),
+                                rx_errors: Some(stats.rx_errors as i64),
+                                tx_errors: Some(stats.tx_errors as i64),
+                            }
+                        })
                 })
                 .collect::<Vec<_>>();
             sysinfo.network_stats = Some(ret);
@@ -423,10 +471,10 @@ where
     pub async fn create_namespace(
         &self,
         wg_namespace: &Vec<models::WgNamespace>,
-        _context: &C,
+        _context: &C
     ) -> Result<(), ApiError> {
         debug!("create_namespace called with {} namespaces", wg_namespace.len());
-        
+
         for namespace in wg_namespace {
             match self.create_namespace_handler(namespace, false, true, true).await {
                 Err(e) => {
@@ -439,65 +487,87 @@ where
                 }
             }
         }
-        
+
         Ok(())
     }
 
     pub async fn delete_namespace(
         &self,
         wg_namespace: &Vec<models::WgNamespace>,
-        _context: &C,
+        _context: &C
     ) -> Result<(), ApiError> {
         debug!("delete_namespace called with {} namespaces", wg_namespace.len());
-        
+
         for namespace in wg_namespace {
             if let Err(e) = self.delete_namespace_handler(namespace).await {
                 return Err(format!("Failed to delete namespace: {}", e).into());
             }
         }
-        
+
         Ok(())
+    }
+
+    async fn get_namespace_names(
+        &self,
+        namespaces: Option<&Vec<models::WgNamespace>>
+    ) -> Result<Vec<String>, ApiError> {
+        let mut namespace_names = namespaces.map_or_else(
+            || Vec::new(),
+            |ns| {
+                ns.iter()
+                    .map(|n| n.name.clone())
+                    .collect::<Vec<_>>()
+            }
+        );
+        if namespace_names.is_empty() {
+            namespace_names = self.etcd_client
+                .get_namespace_names().await
+                .map_err(|e| ApiError::from(format!("Failed to get all namespaces: {}", e)))?;
+        }
+        Ok(namespace_names)
     }
 
     pub async fn list_namespaces(
         &self,
-        wg_namespace: Option<&Vec<models::WgNamespace>>,
-        _context: &C,
+        namespaces: Option<&Vec<models::WgNamespace>>
     ) -> Result<Vec<models::WgNamespaceDetail>, ApiError> {
-        debug!("list_namespaces called");
-        
-        if let Some(namespaces) = wg_namespace {
-            let mut details = Vec::new();
-            for ns in namespaces {
-                if let Ok(detail) = self.get_namespace_detail(&ns.name).await {
-                    details.push(detail);
-                }
-            }
-            Ok(details)
-        } else {
-            // Get all namespaces from etcd
-            let all_namespaces = AsRef::<Client>::as_ref(self).get_namespace_summary().await;
-            if let Some(namespaces) = all_namespaces {
-                let mut details = Vec::new();
-                for namespace_name in namespaces {
-                    if let Ok(detail) = self.get_namespace_detail(&namespace_name).await {
-                        details.push(detail);
-                    }
-                }
-                Ok(details)
-            } else {
-                Ok(Vec::new())
-            }
+        debug!("========= list_namespaces =========");
+
+        let mut details = Vec::new();
+        let namespace_names = self.get_namespace_names(namespaces).await?;
+        for ns in namespace_names {
+            let detail = self
+                .get_namespace_detail(ns.as_str()).await
+                .map_err(|e| ApiError::from(format!("Failed to get namespace detail: {}", e)))?;
+            details.push(detail);
         }
+        Ok(details)
+    }
+
+    pub async fn list_users(
+        &self,
+        namespaces: Option<&Vec<models::WgNamespace>>
+    ) -> Result<Vec<models::WgUser>, ApiError> {
+        debug!("========= list_users =========");
+
+        let mut all_users = Vec::new();
+        let namespace_names = self.get_namespace_names(namespaces).await?;
+        for ns in namespace_names {
+            let mut users = self
+                .get_namespace_users(ns.as_str()).await
+                .map_err(|e| ApiError::from(format!("Failed to get {} users: {}", ns, e)))?;
+            all_users.append(&mut users);
+        }
+        Ok(all_users)
     }
 
     pub async fn create_user(
         &self,
         wg_users: &Vec<models::WgUser>,
-        _context: &C,
+        _context: &C
     ) -> Result<(), ApiError> {
         debug!("create_user called with {} users", wg_users.len());
-        
+
         for user in wg_users {
             match self.create_wireguard_user(user, false, false).await {
                 Ok(_) => {
@@ -509,17 +579,17 @@ where
                 }
             }
         }
-        
+
         Ok(())
     }
 
     pub async fn delete_user(
         &self,
         wg_users: &Vec<models::WgUser>,
-        _context: &C,
+        _context: &C
     ) -> Result<(), ApiError> {
         debug!("delete_user called with {} users", wg_users.len());
-        
+
         for user in wg_users {
             match self.delete_wireguard_user(user).await {
                 Ok(_) => {
@@ -534,7 +604,7 @@ where
                 }
             }
         }
-        
+
         Ok(())
     }
 }

@@ -2,15 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 use async_trait::async_trait;
-use etcd_rs::{
-    Client, ClientConfig, KeyValueOp, DeleteResponse,
-    Endpoint,
-};
-use log::{debug, info, warn};
+use etcd_rs::{ Client, ClientConfig, KeyValueOp, DeleteResponse, Endpoint };
+use log::{ debug, info, warn };
+use std::io::{ Error, ErrorKind };
+use std::io::Result as IoResult;
 use std::collections::HashMap;
 use std::time::Duration;
-use wg_api::models::{self, *};
-use std::io;
+use wg_api::models::{ self, * };
 
 pub struct EtcdClientConfig {
     nodes: Vec<String>,
@@ -21,7 +19,10 @@ pub const ETCD_USER_PREFIX: &str = "/wg/{hostname}/namespace/users";
 
 impl EtcdClientConfig {
     pub fn new(nodes: &Vec<&str>) -> Self {
-        let nodes_string = nodes.iter().map(|&res| res.to_string()).collect();
+        let nodes_string = nodes
+            .iter()
+            .map(|&res| res.to_string())
+            .collect();
 
         EtcdClientConfig {
             nodes: nodes_string,
@@ -50,18 +51,17 @@ impl EtcdClientConfig {
             auth: None,
             connect_timeout: Duration::from_secs(5),
             http2_keep_alive_interval: Duration::from_secs(30),
-        })
-        .await;
+        }).await;
 
         client.ok()
     }
 }
 
-pub fn get_hostname() -> io::Result<String> {
+pub fn get_hostname() -> IoResult<String> {
     let name = hostname::get()?;
-    let namestr = name.to_str().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "Invalid hostname")
-    })?;
+    let namestr = name
+        .to_str()
+        .ok_or_else(|| { Error::new(ErrorKind::InvalidData, "Invalid hostname") })?;
     Ok(namestr.to_string())
 }
 
@@ -88,87 +88,91 @@ fn generate_pk_to_user_id_key(namespace: &str, pk: &str) -> String {
 #[async_trait]
 pub trait EtcdApiHander {
     // user indexed with user id (not public key)
-    async fn save_user(&self, namespace: &str, id: &str, content: &str) -> std::io::Result<()>;
-    async fn get_user(&self, namespace: &str, id: &str) -> std::io::Result<WgUser>;
-    async fn delete_user(&self, namespace: &str, id: &str) -> std::io::Result<()>;
+    async fn save_user(&self, namespace: &str, id: &str, content: &str) -> IoResult<()>;
+    async fn get_user(&self, namespace: &str, id: &str) -> IoResult<WgUser>;
+    async fn delete_user(&self, namespace: &str, id: &str) -> IoResult<()>;
 
     // public key to user id mapping
-    async fn save_pk(&self, namespace: &str, pk: &str, content: &str) -> std::io::Result<()>;
-    async fn get_pk(&self, namespace: &str, pk: &str) -> std::io::Result<String>;
-    async fn delete_pk(&self, namespace: &str, pk: &str) -> std::io::Result<()>;
+    async fn save_pk(&self, namespace: &str, pk: &str, content: &str) -> IoResult<()>;
+    async fn get_pk(&self, namespace: &str, pk: &str) -> IoResult<String>;
+    async fn delete_pk(&self, namespace: &str, pk: &str) -> IoResult<()>;
 
     // entry api
-    async fn save_entry(&self, key: &str, content: &str) -> std::io::Result<()>;
-    async fn get_single_entry(&self, key: &str) -> std::io::Result<String>;
-    async fn delete_entry(&self, key: &str) -> std::io::Result<()>;
+    async fn save_entry(&self, key: &str, content: &str) -> IoResult<()>;
+    async fn get_single_entry(&self, key: &str) -> IoResult<String>;
+    async fn delete_entry(&self, key: &str) -> IoResult<()>;
 
     // namespace
-    async fn save_into_namespace(&self, namespace: &str, content: &str) -> std::io::Result<()>;
-    async fn get_namespace_summary(&self) -> Option<Vec<String>>;
-    async fn get_namespace_details(&self) -> std::io::Result<HashMap<String, WgNamespace>>;
-    async fn get_namespace(&self, namespace: &str) -> std::io::Result<WgNamespace>;
-    async fn delete_namespace(&self, namespace: &str) -> std::io::Result<DeleteResponse>;
-    async fn delete_all_users_with_namespace(&self, namespace: &str) -> std::io::Result<()>;
+    async fn save_namespace(&self, namespace: &str, content: &str) -> IoResult<()>;
+    async fn get_namespace_names(&self) -> IoResult<Vec<String>>;
+    async fn get_namespace_details(&self) -> IoResult<HashMap<String, WgNamespace>>;
+    async fn get_namespace(&self, namespace: &str) -> IoResult<WgNamespace>;
+    async fn delete_namespace(&self, namespace: &str) -> IoResult<DeleteResponse>;
+    async fn delete_all_users_with_namespace(&self, namespace: &str) -> IoResult<()>;
     async fn get_all_users_with_namespace(
         &self,
-        namespace: &str,
-    ) -> std::io::Result<HashMap<String, WgUser>>;
+        namespace: &str
+    ) -> IoResult<HashMap<String, WgUser>>;
 }
 
 #[async_trait]
 impl EtcdApiHander for Client {
-    async fn save_into_namespace(&self, namespace: &str, content: &str) -> std::io::Result<()> {
+    async fn save_namespace(&self, namespace: &str, content: &str) -> IoResult<()> {
         let key = generate_namespace_key(namespace);
         // etcd-rs put expects a tuple (key, value)
         let result = self.put((key, content)).await;
 
         result.map_or_else(
-            |e| Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-            |_| Ok(()),
+            |e| Err(Error::new(ErrorKind::Other, e.to_string())),
+            |_| Ok(())
         )
     }
 
-    async fn save_user(&self, namespace: &str, id: &str, content: &str) -> std::io::Result<()> {
+    async fn save_user(&self, namespace: &str, id: &str, content: &str) -> IoResult<()> {
         self.save_entry(&generate_user_key(namespace, id), content).await
     }
 
-    async fn save_pk(&self, namespace: &str, pk: &str, content: &str) -> std::io::Result<()> {
+    async fn save_pk(&self, namespace: &str, pk: &str, content: &str) -> IoResult<()> {
         self.save_entry(&generate_pk_to_user_id_key(namespace, pk), content).await
     }
 
-    async fn save_entry(&self, key: &str, content: &str) -> std::io::Result<()> {
+    async fn save_entry(&self, key: &str, content: &str) -> IoResult<()> {
         // etcd-rs put expects a tuple (key, value)
         let result = self.put((key, content)).await;
 
         result.map_or_else(
-            |e| Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-            |_| Ok(()),
+            |e| Err(Error::new(ErrorKind::Other, e.to_string())),
+            |_| Ok(())
         )
     }
 
-    async fn get_namespace_summary(&self) -> Option<Vec<String>> {
+    async fn get_namespace_names(&self) -> IoResult<Vec<String>> {
         let hostname = get_hostname().unwrap_or_else(|_| "localhost".to_string());
-        let prefix = format!("/wg/{}/namespace/configuration", hostname);
-        let prefix_end = format!("/wg/{}/namespace/configuration{}", hostname, '\u{0}');
-
-        // get_range expects Vec<u8> parameters
-        let values = self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await;
-
-        values
-            .map(|value| {
-                value
-                    .kvs
-                    .into_iter()
+        let prefix = format!("/wg/{}/namespace/configuration/", hostname);
+        let prefix_end = format!("/wg/{}/namespace/configuration0", hostname);
+        self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await.map_or_else(
+            |e| Err(Error::new(ErrorKind::Other, e.to_string())),
+            |range| {
+                debug!("namespace count: {} prefix: {}", range.count, prefix);
+                Ok(range.kvs
+                    .iter()
                     .filter_map(|kv| {
-                        String::from_utf8(kv.key).ok()
-                            .and_then(|key_str| key_str.split('/').last().map(|s| s.to_string()))
+                        String::from_utf8(kv.key.clone())
+                            .ok()
+                            .and_then(|key_str|
+                                key_str
+                                    .split('/')
+                                    .last()
+                                    .map(|s| s.to_string())
+                            )
                     })
                     .collect::<Vec<_>>()
-            })
-            .ok()
+                )
+            }
+        )
     }
 
-    async fn get_namespace(&self, namespace: &str) -> std::io::Result<WgNamespace> {
+    async fn get_namespace(&self, namespace: &str) -> IoResult<WgNamespace> {
         let key = generate_namespace_key(namespace);
         // get_range expects Vec<u8> parameters
         let ret = self.get_range(key.as_bytes(), key.as_bytes()).await;
@@ -179,37 +183,28 @@ impl EtcdApiHander for Client {
 
                 if ns_config.kvs.is_empty() {
                     debug!("No namespace found in etcd database: {}", namespace);
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "namespace not found",
-                    ))
+                    Err(Error::new(ErrorKind::NotFound, "namespace not found"))
                 } else if ns_config.kvs.len() != 1 {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "multiple namespaces found",
-                    ))
+                    Err(Error::new(ErrorKind::InvalidData, "multiple namespaces found"))
                 } else {
-                    let value_str = String::from_utf8(ns_config.kvs[0].value.clone())
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                    let value_str = String::from_utf8(ns_config.kvs[0].value.clone()).map_err(|e|
+                        Error::new(ErrorKind::InvalidData, e.to_string())
+                    )?;
 
                     let namespace_conf = serde_json::from_str::<models::WgNamespace>(&value_str);
 
                     namespace_conf.map_err(|e| {
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                        Error::new(ErrorKind::InvalidData, e.to_string())
                     })
                 }
             }
-            Err(e) => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )),
+            Err(e) => Err(Error::new(ErrorKind::Other, e.to_string())),
         }
     }
 
-    async fn get_user(&self, namespace: &str, id: &str) -> std::io::Result<WgUser> {
+    async fn get_user(&self, namespace: &str, id: &str) -> IoResult<WgUser> {
         let key = generate_user_key(namespace, id);
-        // get_range expects Vec<u8> parameters
-        let ret = self.get_range(key.as_bytes(), key.as_bytes()).await;
+        let ret = self.get_by_prefix(key.as_bytes()).await;
 
         match ret {
             Ok(user_config) => {
@@ -217,110 +212,82 @@ impl EtcdApiHander for Client {
 
                 if user_config.kvs.is_empty() {
                     debug!("Cannot find user in database: {}/{}", namespace, id);
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "no user with id found",
-                    ))
+                    Err(Error::new(ErrorKind::NotFound, "no user with id found"))
                 } else if user_config.kvs.len() != 1 {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "multiple users found",
-                    ))
+                    Err(Error::new(ErrorKind::InvalidData, "multiple users found"))
                 } else {
-                    let value_str = String::from_utf8(user_config.kvs[0].value.clone())
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                    let value_str = String::from_utf8(user_config.kvs[0].value.clone()).map_err(|e|
+                        Error::new(ErrorKind::InvalidData, e.to_string())
+                    )?;
 
                     let user_conf = serde_json::from_str::<models::WgUser>(&value_str);
 
-                    user_conf.map_err(|e| {
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-                    })
+                    user_conf.map_err(|e| { Error::new(ErrorKind::InvalidData, e.to_string()) })
                 }
             }
-            Err(e) => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )),
+            Err(e) => Err(Error::new(ErrorKind::Other, e.to_string())),
         }
     }
 
-    async fn get_pk(&self, namespace: &str, pk: &str) -> std::io::Result<String> {
+    async fn get_pk(&self, namespace: &str, pk: &str) -> IoResult<String> {
         self.get_single_entry(&generate_pk_to_user_id_key(namespace, pk)).await
     }
 
-    async fn get_single_entry(&self, key: &str) -> std::io::Result<String> {
-        // get_range expects Vec<u8> parameters
-        let ret = self.get_range(key.as_bytes(), key.as_bytes()).await;
-
-        match ret {
-            Ok(range_resp) => {
-                debug!("Got response from etcd database: key: {}", key);
-
-                if range_resp.kvs.is_empty() {
-                    debug!("Cannot find entry in etcd with key {}", key);
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "no entry with key found",
-                    ))
-                } else if range_resp.kvs.len() != 1 {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "multiple entries found",
-                    ))
-                } else {
-                    String::from_utf8(range_resp.kvs[0].value.clone())
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
-                }
+    async fn get_single_entry(&self, key: &str) -> IoResult<String> {
+        self.get_by_prefix(key.as_bytes()).await.map_err(|e| {
+            Error::new(ErrorKind::Other, format!("failed to get from etcd for key {}: {}", key, e))
+        }).and_then(|range_resp| {
+            if range_resp.kvs.is_empty() {
+                debug!("Cannot find entry in etcd with key {}", key);
+                Err(Error::new(ErrorKind::NotFound, format!("no entry with key {} found", key)))
+            } else if range_resp.kvs.len() != 1 {
+                Err(Error::new(ErrorKind::InvalidData, format!("multiple entries found with key {}", key)))
+            } else {
+                String::from_utf8(range_resp.kvs[0].value.clone()).map_err(|e| {
+                    Error::new(ErrorKind::InvalidData, format!("Failed to parse value for key {}: {}", key, e))
+                })
             }
-            Err(e) => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )),
-        }
+        })
     }
 
-    async fn delete_namespace(&self, namespace: &str) -> std::io::Result<DeleteResponse> {
+    async fn delete_namespace(&self, namespace: &str) -> IoResult<DeleteResponse> {
         let key = generate_namespace_key(namespace);
         // delete expects string, so dereference the String
         let delete = self.delete(key.as_str()).await;
 
-        delete.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        })
+        delete.map_err(|e| { Error::new(ErrorKind::Other, e.to_string()) })
     }
 
-    async fn delete_user(&self, namespace: &str, id: &str) -> std::io::Result<()> {
+    async fn delete_user(&self, namespace: &str, id: &str) -> IoResult<()> {
         self.delete_entry(&generate_user_key(namespace, id)).await
     }
 
-    async fn delete_pk(&self, namespace: &str, pk: &str) -> std::io::Result<()> {
+    async fn delete_pk(&self, namespace: &str, pk: &str) -> IoResult<()> {
         self.delete_entry(&generate_pk_to_user_id_key(namespace, pk)).await
     }
 
-    async fn delete_entry(&self, key: &str) -> std::io::Result<()> {
+    async fn delete_entry(&self, key: &str) -> IoResult<()> {
         // delete expects &str
         let delete = self.delete(key).await;
 
         delete.map_or_else(
-            |e| Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-            |_| Ok(()),
+            |e| Err(Error::new(ErrorKind::Other, e.to_string())),
+            |_| Ok(())
         )
     }
 
-    async fn get_namespace_details(&self) -> std::io::Result<HashMap<String, WgNamespace>> {
+    async fn get_namespace_details(&self) -> IoResult<HashMap<String, WgNamespace>> {
         debug!("Trying to read all namespace configurations...");
         let mut hm = HashMap::new();
 
         let hostname = get_hostname().unwrap_or_else(|_| "localhost".to_string());
-        let prefix = format!("/wg/{}/namespace/configuration", hostname);
-        let prefix_end = format!("/wg/{}/namespace/configuration{}", hostname, '\u{0}');
+        let prefix = format!("/wg/{}/namespace/configuration/", hostname);
+        let prefix_end = format!("/wg/{}/namespace/configuration0", hostname);
 
         // get_range expects Vec<u8> parameters
         let values = self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await;
 
-        let kvs = values.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        })?.kvs;
+        let kvs = values.map_err(|e| { Error::new(ErrorKind::Other, e.to_string()) })?.kvs;
 
         if kvs.is_empty() {
             debug!("No namespace found...");
@@ -328,44 +295,51 @@ impl EtcdApiHander for Client {
 
         for kv in kvs {
             let key_str = String::from_utf8(kv.key).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                Error::new(ErrorKind::InvalidData, e.to_string())
             })?;
 
             let value_str = String::from_utf8(kv.value).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                Error::new(ErrorKind::InvalidData, e.to_string())
             })?;
 
-            let namespace = key_str.split('/').last().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Cannot get namespace for {}", key_str),
-                )
-            })?;
+            let namespace = key_str
+                .split('/')
+                .last()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Cannot get namespace for {}", key_str)
+                    )
+                })?;
 
-            let wg = serde_json::from_str::<WgNamespace>(&value_str).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Cannot deserialize WgNamespace: {}", e),
-                )
-            })?;
+            let wg = serde_json
+                ::from_str::<WgNamespace>(&value_str)
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Cannot deserialize WgNamespace: {}", e)
+                    )
+                })?;
 
             hm.insert(namespace.to_string(), wg);
         }
         Ok(hm)
     }
 
-    async fn delete_all_users_with_namespace(&self, namespace: &str) -> std::io::Result<()> {
-        let prefix = generate_all_users_key_with_namespace(namespace);
-        let prefix_end = format!("{}{}", prefix, '\u{0}');
+    async fn delete_all_users_with_namespace(&self, namespace: &str) -> IoResult<()> {
+        let key = generate_all_users_key_with_namespace(namespace);
+        let prefix = format!("{}/", key);
+        let prefix_end = format!("{}0", key);
 
         // First get all keys to delete - get_range expects Vec<u8> parameters
-        let range_resp = self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let range_resp = self
+            .get_range(prefix.as_bytes(), prefix_end.as_bytes()).await
+            .map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
 
         // Delete each key individually - convert Vec<u8> to String first
         for kv in range_resp.kvs {
             let key_str = String::from_utf8(kv.key).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                Error::new(ErrorKind::InvalidData, e.to_string())
             })?;
             let _ = self.delete(key_str.as_str()).await; // Ignore individual delete errors
         }
@@ -373,22 +347,23 @@ impl EtcdApiHander for Client {
         Ok(())
     }
 
+    // TODO: support pagination so that we don't load all users at once
     async fn get_all_users_with_namespace(
         &self,
-        namespace: &str,
-    ) -> std::io::Result<HashMap<String, WgUser>> {
+        namespace: &str
+    ) -> IoResult<HashMap<String, WgUser>> {
         debug!("Trying to read all users with namespace {}...", namespace);
         let mut hm = HashMap::new();
 
-        let prefix = generate_all_users_key_with_namespace(namespace);
-        let prefix_end = format!("{}{}", prefix, '\u{0}');
+        let key = generate_all_users_key_with_namespace(namespace);
+        let prefix = format!("{}/", key);
+        let prefix_end = format!("{}0", key);
 
-        // get_range expects Vec<u8> parameters
         let all_users_resp = self.get_range(prefix.as_bytes(), prefix_end.as_bytes()).await;
 
         let all_users_kvs = all_users_resp.map_err(|e| {
             debug!("Errors when reading all users for {}", namespace);
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+            Error::new(ErrorKind::Other, e.to_string())
         })?.kvs;
 
         if all_users_kvs.is_empty() {
@@ -397,18 +372,20 @@ impl EtcdApiHander for Client {
 
         for user_kv in all_users_kvs {
             let key_str = String::from_utf8(user_kv.key.clone()).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                Error::new(ErrorKind::InvalidData, e.to_string())
             })?;
 
             let value_str = String::from_utf8(user_kv.value).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                Error::new(ErrorKind::InvalidData, e.to_string())
             })?;
 
             let wg_user = serde_json::from_str::<WgUser>(&value_str);
             if let Err(e) = wg_user {
                 warn!(
                     "Cannot deserialize entry at {} for user {}, reason: {}",
-                    key_str, value_str, e,
+                    key_str,
+                    value_str,
+                    e
                 );
                 // Use as_str() to convert String to &str for delete
                 let _ = self.delete(key_str.as_str()).await;
@@ -477,7 +454,7 @@ mod tests {
     // Helper function for config validation
     fn validate_namespace_config(config: &HashMap<String, String>) -> bool {
         config.get("name").map_or(false, |name| !name.is_empty()) &&
-        config.get("ip").map_or(false, |ip| ip.contains('/')) &&
-        config.get("port").map_or(false, |port| port.parse::<u16>().is_ok())
+            config.get("ip").map_or(false, |ip| ip.contains('/')) &&
+            config.get("port").map_or(false, |port| port.parse::<u16>().is_ok())
     }
 }
